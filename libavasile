@@ -25,7 +25,7 @@ export releasetarget="ws"
 export releaseversion="1"
 
 # Kernel Configuration
-export KERNEL_VERSION="${KERNEL_VERSION:-6.12.85}"
+export KERNEL_VERSION="${KERNEL_VERSION:-6.12.110}"
 export kernelver="${KERNEL_VERSION}-${releasename}"
 
 # Core SquashFS Configuration
@@ -82,11 +82,16 @@ export ISO_SQUASHFS_DIR="${ISO_ROOT_DIR}/LiveOS"
 export PORTAGE_MAIN_DIR="/var/db/repos/gentoo"
 export ARGENT_MAIN_DIR="${ARGENT_MAIN_DIR:-/var/db/repos/argent-ws}"
 export PORTAGE_LINK_CONFDIR="/etc/portage"
+export PORTAGE_MAIN_CONF="${PORTAGE_MAIN_CONF:-00-main.conf}"
 export PORTAGE_GITDIR="${PORTAGE_GITDIR:-/opt/argentws-build/conf/intel/portage}"
 export PORTAGE_MAIN_CONFDIR="${PORTAGE_MAIN_CONFDIR:-/opt/argentws-build}"
 export PORTAGE_REPO="${PORTAGE_REPO:-https://gitlab.com/argent/argentws-build.git}"
 
 export ISO_BINPKGS_SOURCE="${ISO_BINPKGS_SOURCE:-/home/work/packages_argent_making/buildchroot_argentx64/var/cache/binpkgs}"
+export ISO_BINPKGS_TARGET="${ISO_BINPKGS_TARGET:-/var/cache/binhost/binhost-main}"
+
+export ISO_LIVE_CONF="${ISO_LIVE_CONF:-${PORTAGE_LINK_CONFDIR}/make.conf/zz-live.conf}"
+export ISO_INSTALL_MASK="${ISO_INSTALL_MASK:-/usr/share/doc /usr/share/man /usr/share/info /usr/share/gtk-doc /usr/share/devhelp /usr/share/help /usr/lib/debug /usr/src/debug *.la *.a -libgcc.a -libgcc_eh.a -libgcov.a -libc_nonshared.a -libmvec_nonshared.a}"
 
 # Use of sudo for privileged operations
 export ARGENT_USE_SUDO="${ARGENT_USE_SUDO:-0}"
@@ -128,7 +133,7 @@ checkmode() {
 	local avasile_mode
 
 	if [[ -d "${make_conf_path}" ]]; then
-		avasile_mode=$(readlink -f "${make_conf_path}/main.conf")
+		avasile_mode=$(readlink -f "${make_conf_path}/$(find_make_conf_name)")
 	else
 		avasile_mode=$(readlink -f "${make_conf_path}")
 	fi
@@ -176,6 +181,20 @@ checkiflive() {
 	fi
 }
 
+find_make_conf_name() {
+	local make_conf_path="${PORTAGE_LINK_CONFDIR}/make.conf"
+	local confname
+
+	for confname in 00-main.conf main.conf 00-argent.conf ; do
+		if [[ -e "${make_conf_path}/${confname}" || -L "${make_conf_path}/${confname}" ]] ; then
+			echo "${confname}"
+			return 0
+		fi
+	done
+
+	echo "${PORTAGE_MAIN_CONF}"
+}
+
 ensure_make_conf_local() {
 	local conf_local="/etc/portage/make.conf.local"
 	if [[ ! -f "${conf_local}" ]]; then
@@ -188,13 +207,13 @@ set_make_conf_symlink() {
 	local conf_variant="${1}"
 	local make_conf_path="${PORTAGE_LINK_CONFDIR}/make.conf"
 
-	if [[ -L "${make_conf_path}" ]]; then
+	if [[ -L "${make_conf_path}" || -f "${make_conf_path}" ]]; then
 		rm -f "${make_conf_path}"
 	fi
 
 	mkdir -p "${make_conf_path}"
 
-	ln -sf "${PORTAGE_GITDIR}/${conf_variant}" "${make_conf_path}/main.conf"
+	ln -sf "${PORTAGE_GITDIR}/${conf_variant}" "${make_conf_path}/$(find_make_conf_name)"
 }
 
 chrootchecksum() {
@@ -356,8 +375,10 @@ makepkg() {
 
 isostart() {
 	# Mount ISO image core filesystems
+	mkdir -p "${ISO_RSYNC_TARGET}${ISO_BINPKGS_TARGET}"
+
 	local mount_points=(
-		"${ISO_BINPKGS_SOURCE}:${ISO_RSYNC_TARGET}/var/cache/binpkgs:bind"
+		"${ISO_BINPKGS_SOURCE}:${ISO_RSYNC_TARGET}${ISO_BINPKGS_TARGET}:bind"
 		"/etc/resolv.conf:${ISO_RSYNC_TARGET}/etc/resolv.conf:bind"
 		"proc:${ISO_RSYNC_TARGET}/proc:proc"
 		"sysfs:${ISO_RSYNC_TARGET}/sys:sysfs"
@@ -372,7 +393,7 @@ isostart() {
 		if [[ -n "${options}" ]]; then
 			mount -t "${fstype}" ${options} none "${target}"
 		elif [[ "${fstype}" == "bind" ]]; then
-			if [[ "${target}" == *"/var/cache/binpkgs" ]]; then
+			if [[ "${target}" == *"${ISO_BINPKGS_TARGET}" ]]; then
 				mount -o bind,ro "${source}" "${target}"
 			else
 				mount -o bind "${source}" "${target}"
@@ -392,13 +413,46 @@ isostop() {
 		"${ISO_RSYNC_TARGET}/dev/shm"
 		"${ISO_RSYNC_TARGET}/dev"
 		"${ISO_RSYNC_TARGET}/tmp"
-		"${ISO_RSYNC_TARGET}/var/cache/binpkgs"
+		"${ISO_RSYNC_TARGET}${ISO_BINPKGS_TARGET}"
 		"${ISO_RSYNC_TARGET}/etc/resolv.conf"
 	)
 	
 	for mount_point in "${mount_points[@]}"; do
 		umount -l "${mount_point}" >/dev/null 2>&1
 	done
+}
+
+isoumountall() {
+	isostop
+	umount -l "${ISO_RSYNC_TARGET}" >/dev/null 2>&1
+	umount -l "${ISO_RSYNC_SOURCE}" >/dev/null 2>&1
+}
+
+isozerofree() {
+	local img="${ISO_RSYNC_TARGET}.img"
+	local tries=0
+
+	sync
+	while mountpoint -q "${ISO_RSYNC_TARGET}" && [[ ${tries} -lt 10 ]] ; do
+		umount "${ISO_RSYNC_TARGET}" >/dev/null 2>&1 || sleep 1
+		tries=$((tries + 1))
+	done
+
+	if mountpoint -q "${ISO_RSYNC_TARGET}" ; then
+		ewarn "${ISO_RSYNC_TARGET} is still busy, falling back to lazy unmount"
+		ewarn "free space will not be zeroed, the squashfs will be larger than needed"
+		umount -l "${ISO_RSYNC_TARGET}" >/dev/null 2>&1
+		return 1
+	fi
+
+	if ! command -v zerofree > /dev/null 2>&1 ; then
+		ewarn "sys-fs/zerofree is not installed, free space will not be zeroed"
+		ewarn "deleted packages stay in ${img} and do not compress away"
+		return 1
+	fi
+
+	einfo "Zeroing free space in ${img}"
+	zerofree -v "${img}" || ewarn "zerofree failed on ${img}, continuing anyway"
 }
 
 isousertree() {
@@ -458,6 +512,24 @@ isoservices() {
 		"systemctl --user enable pipewire-pulse.socket wireplumber.service pipewire.service"
 	
 	set +x
+}
+
+isoinstallmask() {
+	local conf_dir
+	conf_dir="$(dirname "${ISO_LIVE_CONF}")"
+
+	if ! chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "test -d '${conf_dir}'" ; then
+		eerror "${conf_dir} is missing inside the ISO chroot"
+		exit 1
+	fi
+
+	einfo "We're adding the live INSTALL_MASK: ${ISO_LIVE_CONF}"
+	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "printf 'INSTALL_MASK=\"\${INSTALL_MASK} %s\"\n' '${ISO_INSTALL_MASK}' > '${ISO_LIVE_CONF}'"
+}
+
+isoinstallmaskremove() {
+	einfo "Removing the live INSTALL_MASK: ${ISO_LIVE_CONF}"
+	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "rm -f '${ISO_LIVE_CONF}'"
 }
 
 isochroot() {
@@ -621,7 +693,9 @@ prepareiso() {
     
     einfo "Installing packages and configuring ISO environment..."
     isostart
+    isoinstallmask
     isochroot "$@"
+    isoinstallmaskremove
     isostop
     
     isostart
@@ -629,8 +703,8 @@ prepareiso() {
     isostop
     
     einfo "Finalizing ISO filesystem..."
-    umount -l "${ISO_RSYNC_TARGET}" >/dev/null 2>&1
-    
+    isozerofree
+
     # Move real filesystem to proper location
     mv "${ISO_RSYNC_TARGET}.img" "${ISO_REALFS_DIR}/rootfs.img"
     
@@ -677,8 +751,8 @@ cleanupiso() {
 	)
 	
 	# Unmount any remaining mounts
-	umount "${ISO_RSYNC_SOURCE}" >/dev/null 2>&1
-	
+	isoumountall
+
 	# Remove temporary directories
 	for target in "${cleanup_targets[@]}"; do
 		if [[ -d "${target}" ]]; then
@@ -725,6 +799,7 @@ makeiso() {
 	
 	checkroot
 	chrootchecksum
+	trap isoumountall EXIT INT TERM
 	prepareiso "$@"
 	bootloaderiso
 	cleanupiso
