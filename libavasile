@@ -1217,7 +1217,7 @@ srccustom() {
 		rm -rf "${PORTAGE_MAIN_CONFDIR}/.git"
 		
 		# Remove default package configuration
-		rm -rf "${PORTAGE_MAIN_CONFDIR}/conf/intel/portage/package.keywords/"*
+		rm -rf "${PORTAGE_MAIN_CONFDIR}/conf/intel/portage/package.accept_keywords/"*
 		rm -rf "${PORTAGE_MAIN_CONFDIR}/conf/intel/portage/package.use/"*
 	fi
 	echo
@@ -1356,14 +1356,14 @@ decentralized_gentoo() {
 	rm -rf "${PORTAGE_LINK_CONFDIR}/.git"
 	
 	# Clean up Argent-specific package configurations
-	local gitignore_keywords="${PORTAGE_MAIN_CONFDIR}/conf/intel/portage/package.keywords/.gitignore"
+	local gitignore_keywords="${PORTAGE_MAIN_CONFDIR}/conf/intel/portage/package.accept_keywords/.gitignore"
 	local gitignore_use="${PORTAGE_MAIN_CONFDIR}/conf/intel/portage/package.use/.gitignore"
 	
 	if [[ -f "${gitignore_keywords}" ]]; then
 		sed -i 's|!||g' "${gitignore_keywords}"
 		while IFS= read -r keyword_file; do
 			if [[ "${keyword_file}" == *"keyword"* ]]; then
-				rm -f "${PORTAGE_MAIN_CONFDIR}/conf/intel/portage/package.keywords/${keyword_file}"
+				rm -f "${PORTAGE_MAIN_CONFDIR}/conf/intel/portage/package.accept_keywords/${keyword_file}"
 			fi
 		done < "${gitignore_keywords}"
 	fi
