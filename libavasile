@@ -504,13 +504,7 @@ isoservices() {
 	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "rm -f /etc/resolv.conf"
 	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c \
 		"ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"
-	
-	# Configure audio services (disable PulseAudio, enable PipeWire)
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c \
-		"systemctl --user disable pulseaudio.socket pulseaudio.service"
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c \
-		"systemctl --user enable pipewire-pulse.socket wireplumber.service pipewire.service"
-	
+
 	set +x
 }
 
@@ -530,6 +524,12 @@ isoinstallmask() {
 isoinstallmaskremove() {
 	einfo "Removing the live INSTALL_MASK: ${ISO_LIVE_CONF}"
 	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "rm -f '${ISO_LIVE_CONF}'"
+}
+
+isoupdatedone() {
+	einfo "Rebuilding linker cache"
+	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "ldconfig ; systemd-hwdb update ; journalctl --update-catalog ; touch /etc/.updated /var/.updated" \
+		|| ewarn "Could not update linker cache and systemd stuff"
 }
 
 isochroot() {
@@ -696,6 +696,7 @@ prepareiso() {
     isoinstallmask
     isochroot "$@"
     isoinstallmaskremove
+    isoupdatedone
     isostop
     
     isostart
