@@ -462,6 +462,7 @@ isousertree() {
 
 isoramfs() {
 	# Generate ISO initramfs with live boot modules
+	rm -f "${ISO_RSYNC_TARGET}/boot/${isoramfsname}"
 	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${isoramfscmd}"
 }
 
@@ -499,6 +500,9 @@ isoservices() {
 	for service in "${services[@]}"; do
 		chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "systemctl enable ${service}"
 	done
+
+	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c \
+		"systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service"
 	
 	# Configure networking
 	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "rm -f /etc/resolv.conf"
@@ -524,6 +528,20 @@ isoinstallmask() {
 isoinstallmaskremove() {
 	einfo "Removing the live INSTALL_MASK: ${ISO_LIVE_CONF}"
 	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "rm -f '${ISO_LIVE_CONF}'"
+}
+
+isoosrelease() {
+	local src="${ISO_RSYNC_TARGET}/usr/lib/argent/os-release"
+
+	if [[ ! -f "${src}" ]]; then
+		ewarn "${src} is missing, os-release is left as it is"
+		return 1
+	fi
+
+	einfo "Writing Argent os-release"
+	cp -f "${src}" "${ISO_RSYNC_TARGET}/usr/lib/os-release"
+	rm -f "${ISO_RSYNC_TARGET}/etc/os-release"
+	cp -f "${src}" "${ISO_RSYNC_TARGET}/etc/os-release"
 }
 
 isoupdatedone() {
@@ -571,7 +589,7 @@ isochroot() {
 			
 			if [[ ${#iso_packages[@]} -gt 0 ]]; then
 				einfo "Installing ${#iso_packages[@]} packages..."
-				chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "epkg autoinstall ${iso_packages[*]}"
+				chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "emerge -q ${iso_packages[*]}"
 			else
 				ewarn "No packages found in provided lists"
 			fi
@@ -649,9 +667,14 @@ prepareiso() {
     einfo "Generating initramfs for live boot..."
     isostart
     isoramfs
+    local ramfs_rc=$?
     isostop
-    
-    if [[ -f "${ISO_RSYNC_TARGET}/boot/${isoramfsname}" ]]; then
+
+    if [[ ${ramfs_rc} -ne 0 ]]; then
+        eerror "dracut exited ${ramfs_rc} while generating the live initramfs"
+        isoumountall
+        exit 1
+    elif [[ -f "${ISO_RSYNC_TARGET}/boot/${isoramfsname}" ]]; then
         einfo "Moving initramfs to final location..."
         mv "${ISO_RSYNC_TARGET}/boot/${isoramfsname}" "${ISO_ROOT_DIR}/boot/initrd"
     else
@@ -696,6 +719,7 @@ prepareiso() {
     isoinstallmask
     isochroot "$@"
     isoinstallmaskremove
+    isoosrelease
     isoupdatedone
     isostop
     
@@ -879,7 +903,7 @@ fetchportageconfig() {
 	einfo "Injecting ${releasename}-${releasetarget} build system"
 	
 	pushd /opt >/dev/null 2>&1 || exit 1
-	git clone --branch master "${PORTAGE_REPO}"
+	git clone --branch "${AVASILE_BRANCH:-master}" "${PORTAGE_REPO}"
 	popd >/dev/null 2>&1 || exit 1
 }
 
@@ -893,11 +917,11 @@ fetchfullportagetree() {
 		
 		cd "${PORTAGE_MAIN_DIR}" || exit 1
 		git init >/dev/null 2>&1
-		git remote add origin https://gitlab.com/argent/portage.git
-		
+		git remote add -t "${AVASILE_BRANCH:-master}" origin https://gitlab.com/argent/portage.git
+
 		einfo "Fetching portage tree (this may take a while)..."
-		git pull --depth=1 origin master
-		git branch -u origin/master master
+		git fetch --depth=1 origin "${AVASILE_BRANCH:-master}"
+		git checkout -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}"
 		
 		# Clean up unnecessary files
 		rm -rf "${PORTAGE_MAIN_DIR}/profiles/updates"
@@ -919,9 +943,9 @@ fetchfullargentbuilddir() {
 		cd "${PORTAGE_MAIN_CONFDIR}" || exit 1
 		
 		git init >/dev/null 2>&1
-		git remote add origin "${PORTAGE_REPO}"
-		git pull --depth=1 origin master
-		git branch -u origin/master master
+		git remote add -t "${AVASILE_BRANCH:-master}" origin "${PORTAGE_REPO}"
+		git fetch --depth=1 origin "${AVASILE_BRANCH:-master}"
+		git checkout -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}"
 		
 		einfo "Argent build directory sync completed"
 	else
@@ -942,7 +966,7 @@ fetchminimalportagetree() {
 
         cd "${PORTAGE_MAIN_DIR}" || exit 1
         git init >/dev/null 2>&1
-        git remote add origin https://gitlab.com/argent/portage.git
+        git remote add -t "${AVASILE_BRANCH:-master}" origin https://gitlab.com/argent/portage.git
 
         # Use partial cloning to save space
         git config core.sparseCheckout true
@@ -950,9 +974,8 @@ fetchminimalportagetree() {
         git config remote.origin.promisor true
         git config remote.origin.partialCloneFilter blob:none
 
-        git fetch --depth=1 --filter=blob:none origin master
-        git checkout -f master
-        git branch -u origin/master master
+        git fetch --depth=1 --filter=blob:none origin "${AVASILE_BRANCH:-master}"
+        git checkout -f -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}"
 
         git sparse-checkout init --cone
         git sparse-checkout set profiles metadata eclass
@@ -988,16 +1011,15 @@ fetchminimalargenttree() {
 
         cd "${ARGENT_MAIN_DIR}" || exit 1
         git init >/dev/null 2>&1
-        git remote add origin https://gitlab.com/argent/argent-ws.git
+        git remote add -t "${AVASILE_BRANCH:-master}" origin https://gitlab.com/argent/argent-ws.git
 
         git config core.sparseCheckout true
         git config extensions.partialClone origin
         git config remote.origin.promisor true
         git config remote.origin.partialCloneFilter blob:none
 
-        git fetch --depth=1 --filter=blob:none origin master
-        git checkout -f master
-        git branch -u origin/master master
+        git fetch --depth=1 --filter=blob:none origin "${AVASILE_BRANCH:-master}"
+        git checkout -f -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}"
 
         # Configure sparse checkout properly
         git sparse-checkout init --cone
@@ -1037,6 +1059,137 @@ fetchoverlays() {
 # ============================================================================
 # System Mode Configuration Functions
 # ============================================================================
+
+repo_branch() {
+	local repo="${1}" upstream current
+
+	upstream="$(git -C "${repo}" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"
+	if [[ -n "${upstream}" ]] ; then
+		echo "${upstream#*/}"
+		return
+	fi
+
+	current="$(git -C "${repo}" symbolic-ref --quiet --short HEAD 2>/dev/null)"
+	echo "${current:-master}"
+}
+
+checkout_branch() {
+	local repo="${1}" branch="${2}" force="${3}"
+	local -a fetch_opts=() checkout_opts=()
+
+	[[ "$(git -C "${repo}" rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]] && fetch_opts+=( --depth=1 )
+	[[ "${force}" == "--force" ]] && checkout_opts+=( -f )
+
+	git -C "${repo}" remote set-branches origin "${branch}" || return 1
+	git -C "${repo}" fetch "${fetch_opts[@]}" origin "+refs/heads/${branch}:refs/remotes/origin/${branch}" || return 1
+	git -C "${repo}" checkout "${checkout_opts[@]}" -B "${branch}" --track "origin/${branch}" || return 1
+
+	if [[ -e "${repo}/.gitmodules" ]] ; then
+		git -C "${repo}" submodule update --recursive --depth=1 || return 1
+	fi
+}
+
+restore_branch() {
+	local repo="${1}" ref="${2}" upstream="${3}"
+
+	ewarn "Restoring ${repo} to ${ref}"
+	git -C "${repo}" remote set-branches origin "${upstream}"
+	git -C "${repo}" checkout -f "${ref}" > /dev/null 2>&1 || eerror "Could not restore ${repo}, fix it by hand or set up a mode again"
+}
+
+switch_repo_branch() {
+	local target="${AVASILE_BRANCH}" force="" arg repo failed=0 dirty=0 i
+	local -a selected=() repos=() touched=() from_ref=() from_upstream=()
+	local usage="Usage: avasile --branch master|dev [gentoo] [argent-ws] [argentws-build] [--force]"
+
+	for arg in "$@" ; do
+		case "${arg}" in
+			--force) force="--force" ;;
+			gentoo) selected+=( "${PORTAGE_MAIN_DIR}" ) ;;
+			argent-ws) selected+=( "${ARGENT_MAIN_DIR}" ) ;;
+			argentws-build) selected+=( "${PORTAGE_MAIN_CONFDIR}" ) ;;
+			*)
+				eerror "Unknown repository or option: ${arg}"
+				eerror "${usage}"
+				return 1
+				;;
+		esac
+	done
+
+	if [[ ${#selected[@]} -gt 0 ]] ; then
+		for repo in "${selected[@]}" ; do
+			if [[ ! -d "${repo}/.git" ]] ; then
+				eerror "${repo} is not a git repository"
+				return 1
+			fi
+			repos+=( "${repo}" )
+		done
+	else
+		for repo in "${PORTAGE_MAIN_DIR}" "${ARGENT_MAIN_DIR}" "${PORTAGE_MAIN_CONFDIR}" ; do
+			if [[ ! -d "${repo}/.git" ]] ; then
+				ewarn "${repo} is not a git repository, skipping it"
+				continue
+			fi
+			repos+=( "${repo}" )
+		done
+	fi
+
+	if [[ ${#repos[@]} -eq 0 ]] ; then
+		eerror "No git repositories found, set up a mode first"
+		return 1
+	fi
+
+	einfo "Checking repositories before switching to ${target}"
+	for repo in "${repos[@]}" ; do
+		if [[ -e "${repo}/.git/MERGE_HEAD" || -d "${repo}/.git/rebase-merge" || -d "${repo}/.git/rebase-apply" ]] ; then
+			eerror "${repo} has a merge or rebase in progress"
+			failed=1
+			continue
+		fi
+
+		if ! git -C "${repo}" ls-remote --exit-code --heads origin "${target}" > /dev/null 2>&1 ; then
+			eerror "${repo}: branch ${target} not found on origin (or origin is unreachable)"
+			failed=1
+			continue
+		fi
+
+		if [[ "${force}" != "--force" && -n "$(git -C "${repo}" status --porcelain --untracked-files=no --ignore-submodules=all)" ]] ; then
+			eerror "${repo} has local changes:"
+			git -C "${repo}" status --short --untracked-files=no --ignore-submodules=all
+			dirty=1
+			failed=1
+		fi
+	done
+
+	if [[ ${failed} -eq 1 ]] ; then
+		eerror "Nothing was changed"
+		[[ ${dirty} -eq 1 ]] && eerror "Commit or drop the local changes, or use --force to discard them"
+		return 1
+	fi
+
+	for repo in "${repos[@]}" ; do
+		if [[ "$(git -C "${repo}" symbolic-ref --quiet --short HEAD 2>/dev/null)" == "${target}" && "$(repo_branch "${repo}")" == "${target}" ]] ; then
+			einfo "${repo} is already on ${target}"
+			continue
+		fi
+
+		touched+=( "${repo}" )
+		from_ref+=( "$(git -C "${repo}" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "${repo}" rev-parse HEAD)" )
+		from_upstream+=( "$(repo_branch "${repo}")" )
+
+		einfo "Switching ${repo} from ${from_upstream[-1]} to ${target}"
+		if ! checkout_branch "${repo}" "${target}" "${force}" ; then
+			eerror "Switching ${repo} failed, putting every repository back"
+			for (( i=${#touched[@]}-1 ; i>=0 ; i-- )) ; do
+				restore_branch "${touched[i]}" "${from_ref[i]}" "${from_upstream[i]}"
+			done
+			return 1
+		fi
+	done
+
+	einfo "All repositories now follow ${target}"
+	einfo "Going back to an older branch can make emerge downgrade packages, that is expected"
+}
 
 refresh_pkg_keys() {
 	[[ "${AVASILE_SKIP_KEYS:-0}" == "1" ]] && return 0
@@ -1450,6 +1603,20 @@ showhelp() {
 	echo -e "	${COLOR_HEADER}--skip-keys${COLOR_RESET} (or ${COLOR_HEADER}--no-keys${COLOR_RESET})"
 	echo -e "		Combine with any mode: skip the getuto keyring refresh (no keyserver access)."
 	echo
+	echo -e "	${COLOR_HEADER}--branch${COLOR_RESET} ${COLOR_HEADER}master|dev${COLOR_RESET} [${COLOR_HEADER}gentoo${COLOR_RESET}] [${COLOR_HEADER}argent-ws${COLOR_RESET}] [${COLOR_HEADER}argentws-build${COLOR_RESET}] [${COLOR_HEADER}--force${COLOR_RESET}]"
+	echo -e "		Switch the portage tree, argent-ws overlay and portage config to that branch."
+	echo -e "		Name one or more repositories to switch only those."
+	echo -e "		Every later 'epkg update', 'epkg devsync' or 'emerge --sync' respects that."
+	echo -e "		Refuses when there are local changes, ${COLOR_HEADER}--force${COLOR_RESET} discards them."
+	echo -e "		Combine with any mode to set it up on that branch from the start."
+	echo -e "		Same as ${COLOR_HEADER}epkg branch master|dev${COLOR_RESET}, plain ${COLOR_HEADER}epkg branch${COLOR_RESET} shows the current state."
+	echo -e "		"
+	echo -e "		Examples:"
+	echo -e "			${COLOR_HEADER}avasile --branch dev${COLOR_RESET}"
+	echo -e "			${COLOR_HEADER}avasile --branch dev argent-ws${COLOR_RESET}"
+	echo -e "			${COLOR_HEADER}avasile --branch dev --devmode${COLOR_RESET}"
+	echo -e "			${COLOR_HEADER}avasile --branch master${COLOR_RESET}"
+	echo
 	echo -e "	${COLOR_HEADER}--usermode${COLOR_RESET}"
 	echo -e "		Switch to binary-only mode (usermode)."
 	echo -e "		"
@@ -1528,6 +1695,7 @@ showhelp() {
 	echo -e "			git remote add origin ${PORTAGE_REPO}"
 	echo -e "			git pull --depth=1 origin master"
 	echo -e "			git branch -u origin/master master"
+	echo -e "		Then ${COLOR_HEADER}avasile --branch dev${COLOR_RESET} if you want to follow dev."
 	echo
 	exit 0
 }

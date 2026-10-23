@@ -22,12 +22,23 @@ source /lib64/avasile/libavasile
 checkiflive
 
 export AVASILE_SKIP_KEYS="${AVASILE_SKIP_KEYS:-0}"
+export AVASILE_BRANCH="${AVASILE_BRANCH:-}"
 _avasile_args=()
-for _arg in "$@"; do
-	case "${_arg}" in
+while [[ $# -gt 0 ]]; do
+	case "$1" in
 		--skip-keys|--no-keys) AVASILE_SKIP_KEYS=1 ;;
-		*) _avasile_args+=("${_arg}") ;;
+		--branch)
+			if [[ -z "$2" || "$2" == --* ]]; then
+				eerror "error: --branch needs a branch name, e.g. --branch dev"
+				exit 1
+			fi
+			AVASILE_BRANCH="$2"
+			shift
+			;;
+		--branch=*) AVASILE_BRANCH="${1#--branch=}" ;;
+		*) _avasile_args+=("$1") ;;
 	esac
+	shift
 done
 set -- "${_avasile_args[@]}"
 
@@ -51,15 +62,19 @@ case $1 in
 		;;
 	--usermode)
 		binmode
+		[[ -n "${AVASILE_BRANCH}" ]] && switch_repo_branch
 		;;
 	--devmode)
 		mixedmode
+		[[ -n "${AVASILE_BRANCH}" ]] && switch_repo_branch
 		;;
 	--srcmode)
 		srcmode
+		[[ -n "${AVASILE_BRANCH}" ]] && switch_repo_branch
 		;;
 	--custom)
 		srccustom
+		[[ -n "${AVASILE_BRANCH}" ]] && switch_repo_branch
 		;;
 	--decentralize-user)
 		decentralized_user
@@ -78,6 +93,14 @@ case $1 in
 		;;
 	--help)
 		showhelp
+		;;
+	""|--force|gentoo|argent-ws|argentws-build)
+		if [[ -n "${AVASILE_BRANCH}" ]]; then
+			checkroot
+			switch_repo_branch "$@"
+		else
+			eerror "error: no operation specified, use --help for help"
+		fi
 		;;
 	*)
 		eerror "error: no operation specified, use --help for help"
