@@ -124,7 +124,7 @@ short_pause() {
 	sleep "${1:-1}"
 }
 
-kernelconfig() {
+kernel_check() {
 	# Check if host kernel has required modules for avasile
 	local required_configs=(
 		'CONFIG_OVERLAY_FS='
@@ -251,10 +251,10 @@ checksum_chroot_verify() {
 # CHROOT ENVIRONMENT MANAGEMENT
 # =============================================================================
 
-chrootprepare() {
+chroot_setup() {
 	# Create fresh overlay mount environment
 	mkdir -p "${READ_ONLY_DIR}" "${READ_WRITE_DIR}" "${WORK_DIR}" "${OVERLAY_DIR}" || return 1
-	chrootstart
+	chroot_mount
 }
 
 umount_chroot() {
@@ -277,7 +277,7 @@ umount_chroot() {
 	done
 }
 
-chrootstart() {
+chroot_mount() {
     # Mount core squashfs in overlay configuration
     mount -t squashfs "${chrootx64}" "${READ_ONLY_DIR}" || return 1
     mount -t overlay \
@@ -306,12 +306,12 @@ chrootstart() {
         none "${OVERLAY_DIR}/tmp"
 }
 
-chrootdevtree() {
+chroot_tree_sync() {
 	# Initialize portage tree and overlay in chroot
 	chroot "${OVERLAY_DIR}" su - "${chrootuser}" -c "${chrootsrcmode}"
 }
 
-chrootbuild() {
+chroot_emerge() {
 	# Build and install packages in chroot environment
 	einfo "Starting package build process..."
 	short_pause
@@ -338,21 +338,21 @@ regenerate_cache() {
 	env-update && source /etc/profile
 }
 
-makepkg() {
+chroot_pkg_build() {
 	# Main package building workflow
 	local build_rc
 
 	verify_root_priv
-	kernelconfig
+	kernel_check
 	checksum_chroot_verify
 
-	if ! chrootprepare || ! chrootdevtree; then
+	if ! chroot_setup || ! chroot_tree_sync; then
 		eerror "The build chroot could not be set up, unmounting it"
 		umount_chroot
 		return 1
 	fi
 
-	chrootbuild "$@"
+	chroot_emerge "$@"
 	build_rc=$?
 	chrootx64_iso
 	umount_chroot
@@ -363,7 +363,7 @@ makepkg() {
 # ISO CREATION FUNCTIONS
 # =============================================================================
 
-isostart() {
+iso_mount() {
 	# Mount ISO image core filesystems
 	mkdir -p "${ISO_RSYNC_TARGET}${ISO_BINPKGS_TARGET}"
 
@@ -394,7 +394,7 @@ isostart() {
 	done
 }
 
-isostop() {
+iso_umount() {
 	# Unmount ISO image core filesystems
 	local mount_points=(
 		"${ISO_RSYNC_TARGET}/proc"
@@ -413,7 +413,7 @@ isostop() {
 }
 
 isoumountall() {
-	isostop
+	iso_umount
 	umount -l "${ISO_RSYNC_TARGET}" >/dev/null 2>&1
 	umount -l "${ISO_RSYNC_SOURCE}" >/dev/null 2>&1
 }
@@ -445,28 +445,28 @@ isozerofree() {
 	zerofree -v "${img}" || ewarn "zerofree failed on ${img}, continuing anyway"
 }
 
-isousertree() {
+iso_tree_sync() {
 	# Initialize portage tree and overlay in ISO environment
 	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_BINARY_SETUP}"
 }
 
-isoramfs() {
+iso_initrd_gen() {
 	# Generate ISO initramfs with live boot modules
 	rm -f "${ISO_RSYNC_TARGET}/boot/${ISO_RAMFS_NAME}"
 	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_RAMFS_CMD}"
 }
 
-isoefiimg() {
+iso_efi_gen() {
 	# Generate EFI bootloader
 	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_EFI_CMD}"
 }
 
-isochainloader() {
+iso_grubcore_gen() {
 	# Generate GRUB chainloader for unetbootin compatibility
 	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_CHAINLOAD_CMD}"
 }
 
-isoservices() {
+iso_units_enable() {
 	# Enable live ISO system services
 	set -x
 	
@@ -538,7 +538,7 @@ isoupdatedone() {
 		|| ewarn "Could not update linker cache and systemd stuff"
 }
 
-isochroot() {
+iso_customize() {
 	# Interactive ISO environment setup
 	einfo "========================================"
 	einfo "ISO ENVIRONMENT SETUP"
@@ -589,7 +589,7 @@ isochroot() {
 	fi
 }
 
-prepareiso() {
+iso_rootfs_build() {
     einfo "========================================"
     einfo "PREPARING ISO IMAGE LAYOUT"
     einfo "========================================"
@@ -636,15 +636,15 @@ prepareiso() {
     cp -avx "${ISO_RSYNC_TARGET}/boot/${ISO_KERNEL_NAME}" "${ISO_ROOT_DIR}/boot/vmlinuz"
     
     einfo "Setting up portage configuration in chroot..."
-    isostart
-    isousertree
-    isostop
+    iso_mount
+    iso_tree_sync
+    iso_umount
     
     einfo "Generating initramfs for live boot..."
-    isostart
-    isoramfs
+    iso_mount
+    iso_initrd_gen
     local ramfs_rc=$?
-    isostop
+    iso_umount
 
     if [[ ${ramfs_rc} -ne 0 ]]; then
         eerror "dracut exited ${ramfs_rc} while generating the live initramfs"
@@ -659,9 +659,9 @@ prepareiso() {
     fi
     
     einfo "Generating EFI bootloader..."
-    isostart
-    isoefiimg
-    isostop
+    iso_mount
+    iso_efi_gen
+    iso_umount
     
     if [[ -e "${ISO_RSYNC_TARGET}/root/bootx64.efi" ]]; then
         mv "${ISO_RSYNC_TARGET}/root/bootx64.efi" "${ISO_EFI_DIR}/"
@@ -672,9 +672,9 @@ prepareiso() {
     fi
     
     einfo "Generating GRUB chainloader..."
-    isostart
-    isochainloader
-    isostop
+    iso_mount
+    iso_grubcore_gen
+    iso_umount
     
     if [[ -e "${ISO_RSYNC_TARGET}/root/core.img" ]]; then
         mv "${ISO_RSYNC_TARGET}/root/core.img" "${ISO_GRUB_DIR}/"
@@ -691,17 +691,17 @@ prepareiso() {
     fi
     
     einfo "Installing packages and configuring ISO environment..."
-    isostart
+    iso_mount
     isoinstallmask
-    isochroot "$@"
+    iso_customize "$@"
     isoinstallmaskremove
     isoosrelease
     isoupdatedone
-    isostop
+    iso_umount
     
-    isostart
-    isoservices
-    isostop
+    iso_mount
+    iso_units_enable
+    iso_umount
     
     einfo "Finalizing ISO filesystem..."
     isozerofree
@@ -725,7 +725,7 @@ prepareiso() {
     einfo "========================================"
 }
 
-bootloaderiso() {
+iso_bootcfg_fetch() {
 	einfo "Fetching GRUB2 boot configuration..."
 	
 	if git clone "https://gitlab.com/${releasename}/boot-core.git" "${BOOTLOADER_FETCH_PATH}"; then
@@ -764,7 +764,7 @@ iso_cleaning() {
 	einfo "Cleanup completed"
 }
 
-makeisoimg() {
+iso_image_write() {
 	# Create final ISO image
 	local iso_filename="${releasename}-${releasetarget}-${releaseversion}-${isomainarch}.iso"
 	
@@ -793,19 +793,19 @@ makeisoimg() {
 	fi
 }
 
-makeiso() {
+iso_build() {
 	einfo "========================================"
 	einfo "STARTING ISO CREATION PROCESS"
 	einfo "========================================"
 	
 	verify_root_priv
-	kernelconfig
+	kernel_check
 	checksum_chroot_verify
 	trap isoumountall EXIT INT TERM
-	prepareiso "$@" || return 1
-	bootloaderiso || return 1
+	iso_rootfs_build "$@" || return 1
+	iso_bootcfg_fetch || return 1
 	iso_cleaning
-	makeisoimg || return 1
+	iso_image_write || return 1
 
 	einfo "========================================"
 	einfo "ISO CREATION COMPLETED SUCCESSFULLY"
@@ -858,7 +858,7 @@ remove_portage_config() {
 	rm -rf "${PORTAGE_MAIN_CONFDIR}" >/dev/null 2>&1
 }
 
-resetmode() {
+clear_mode() {
 	# Reset system to clean state
 	verify_root_priv
 	remove_gentoo_tree || return 1
@@ -866,7 +866,7 @@ resetmode() {
 	remove_portage_config
 }
 
-fetch_portage_config() {
+fetch_build_config() {
 	# Fetch Argent build system configuration
 	einfo "Injecting ${releasename}-${releasetarget} build system"
 	git clone --branch "${AVASILE_BRANCH:-master}" "${PORTAGE_REPO}" "${PORTAGE_MAIN_CONFDIR}"
@@ -1233,8 +1233,8 @@ setup_mode() {
 	einfo "Setting up ${name}"
 
 	check_portage_directory
-	resetmode || return 1
-	fetch_portage_config || return 1
+	clear_mode || return 1
+	fetch_build_config || return 1
 
 	if [[ "${mode}" == "binpkgmode" ]]; then
 		fetch_gentoo_tree_minimal || return 1
@@ -1328,7 +1328,7 @@ decentralized_gentoo() {
 # HELP SYSTEM
 # =============================================================================
 
-showhelp() {
+print_usage() {
 	# Color definitions for help output
 	local COLOR_HEADER="\e[1;34m"
 	local COLOR_RESET="\e[0m"
