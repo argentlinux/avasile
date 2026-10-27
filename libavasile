@@ -4,10 +4,15 @@
 # AVASILE - Argent Vasile
 # Versatile Advanced Script for ISOs and Latest Enhancements
 # Copyright (C) 2015 Ghiunhan Mamut (nicknamed V3n3RiX) & Rogentos Team
-# Copyright (C) 2026 Argent Authors
+# Copyright (C) 2015-2026 Argent Linux Team
+# Maintainer: Stefan Cristian B. <stefan.cristian@rogentos.ro>
 # =============================================================================
 
 # Import Gentoo functions
+if [[ ! -r /lib/gentoo/functions.sh ]]; then
+	echo "avasile: /lib/gentoo/functions.sh not found, install sys-apps/gentoo-functions" >&2
+	exit 1
+fi
 source /lib/gentoo/functions.sh
 
 export AVASILE_VERBOSE="${AVASILE_VERBOSE:-0}"
@@ -33,37 +38,35 @@ export chrootx64="${releasename}_${releasetarget}_${releaseversion}_core_x64.squ
 export chrootx64md5="${chrootx64}.md5"
 
 # Overlay Mount Directories
-export rodir="rodir"
-export rwdir="rwdir"
-export workdir="workdir"
-export overlaydir="overlaydir"
+export READ_ONLY_DIR="rodir"
+export READ_WRITE_DIR="rwdir"
+export WORK_DIR="workdir"
+export OVERLAY_DIR="overlaydir"
 
 # Build Environment Variables
 export chrootuser="root"
-export chroot_target="${@:2}"
-export chrootbuildtarget="emerge -kav ${chroot_target}"
 export chrootsrcmode="avasile --srcmode"
 
 # ISO Creation Variables
 export isouser="root"
 export isomainarch="x86_64"
-export isobinmode="avasile --usermode"
-export isokernelname="kernel-genkernel-${isomainarch}-${kernelver}"
-export isoramfsname="initramfs-genkernel-${isomainarch}-${kernelver}"
+export ISO_BINARY_SETUP="avasile --usermode"
+export ISO_KERNEL_NAME="kernel-genkernel-${isomainarch}-${kernelver}"
+export ISO_RAMFS_NAME="initramfs-genkernel-${isomainarch}-${kernelver}"
 
 # ISO Commands
-export isoramfscmd="dracut -N -a dmsquash-live -a pollcdrom -a mdraid \
+export ISO_RAMFS_CMD="dracut -N -a dmsquash-live -a pollcdrom -a mdraid \
     -o systemd -o systemd-initrd -o systemd-networkd -o dracut-systemd \
     -o btrfs -o crypt -o i18n -o usrmount -o lunmask -o nvdimm -o multipath \
-    --force --kver ${kernelver} /boot/${isoramfsname}"
+    --force --kver ${kernelver} /boot/${ISO_RAMFS_NAME}"
 
-export isoeficmd="grub-mkimage -d /usr/lib/grub/x86_64-efi -o bootx64.efi \
+export ISO_EFI_CMD="grub-mkimage -d /usr/lib/grub/x86_64-efi -o bootx64.efi \
     -O x86_64-efi ext2 fat udf btrfs ntfs reiserfs xfs hfsplus lvm ata \
     part_msdos part_gpt part_apple bsd search_fs_uuid normal chain iso9660 \
     configfile help loadenv reboot cat search memdisk tar boot linux chain \
     -p /boot/grub"
 
-export isochainloadcmd="grub-mkimage -d /usr/lib/grub/i386-pc -o core.img \
+export ISO_CHAINLOAD_CMD="grub-mkimage -d /usr/lib/grub/i386-pc -o core.img \
     -O i386-pc biosdisk part_msdos fat -p /boot/grub"
 
 # ISO Directory Layout
@@ -86,6 +89,7 @@ export PORTAGE_MAIN_CONF="${PORTAGE_MAIN_CONF:-00-main.conf}"
 export PORTAGE_GITDIR="${PORTAGE_GITDIR:-/opt/argentws-build/conf/intel/portage}"
 export PORTAGE_MAIN_CONFDIR="${PORTAGE_MAIN_CONFDIR:-/opt/argentws-build}"
 export PORTAGE_REPO="${PORTAGE_REPO:-https://gitlab.com/argent/argentws-build.git}"
+export PORTAGE_PROFILE="${PORTAGE_PROFILE:-default/linux/amd64/23.0/desktop/plasma/systemd}"
 
 export ISO_BINPKGS_SOURCE="${ISO_BINPKGS_SOURCE:-/home/work/packages_argent_making/buildchroot_argentx64/var/cache/binpkgs}"
 export ISO_BINPKGS_TARGET="${ISO_BINPKGS_TARGET:-/var/cache/binhost/binhost-main}"
@@ -93,12 +97,32 @@ export ISO_BINPKGS_TARGET="${ISO_BINPKGS_TARGET:-/var/cache/binhost/binhost-main
 export ISO_LIVE_CONF="${ISO_LIVE_CONF:-${PORTAGE_LINK_CONFDIR}/make.conf/zz-live.conf}"
 export ISO_INSTALL_MASK="${ISO_INSTALL_MASK:-/usr/share/doc /usr/share/man /usr/share/info /usr/share/gtk-doc /usr/share/devhelp /usr/share/help /usr/lib/debug /usr/src/debug *.la *.a -libgcc.a -libgcc_eh.a -libgcov.a -libc_nonshared.a -libmvec_nonshared.a}"
 
-# Use of sudo for privileged operations
-export ARGENT_USE_SUDO="${ARGENT_USE_SUDO:-0}"
+declare -A AVASILE_MODE_CONF=(
+	[binpkgmode]="make.conf.amd64-user"
+	[mixedbinsrc]="make.conf.amd64-devel"
+	[srcmode]="make.conf.amd64-srcmode"
+	[srccustom]="make.conf.amd64-custom"
+)
+
+declare -A AVASILE_MODE_NAME=(
+	[binpkgmode]="user mode (binary packages)"
+	[mixedbinsrc]="mixed binary/source mode (devmode)"
+	[srcmode]="source mode"
+	[srccustom]="custom source mode"
+)
 
 # =============================================================================
 # CORE SYSTEM FUNCTIONS
 # =============================================================================
+
+die() {
+	eerror "$*"
+	exit 1
+}
+
+short_pause() {
+	sleep "${1:-1}"
+}
 
 kernelconfig() {
 	# Check if host kernel has required modules for avasile
@@ -117,14 +141,13 @@ kernelconfig() {
 	
 	if [[ ${#missing_configs[@]} -eq 0 ]]; then
 		einfo "Kernel configuration check passed"
-		sleep 1
+		short_pause
 	else
 		eerror "Vasile requires the following kernel modules:"
 		for config in "${missing_configs[@]}"; do
 			eerror "  - ${config}"
 		done
-		eerror "Please rebuild your kernel with these options enabled"
-		exit 1
+		die "Please rebuild your kernel with these options enabled"
 	fi
 }
 
@@ -157,27 +180,22 @@ checkmode() {
 	esac
 }
 
-checkroot() {
+verify_root_priv() {
 	# Verify root privileges for mount and chroot operations
-	if [[ "${UID}" != "0" ]]; then
-		eerror "Root privileges required for this operation"
-		echo
-		
-		if command -v sudo >/dev/null 2>&1; then
-			einfo "Attempting to restart with sudo..."
-			sudo "$0" "$@"
-		else
-			eerror "sudo not available. Please run as root"
-			exit 1
-		fi
-	fi
+	[[ "${UID}" == "0" ]] && return 0
+
+	eerror "Root privileges required for this operation"
+	echo
+	command -v sudo >/dev/null 2>&1 || die "sudo not available. Please run as root"
+
+	einfo "Attempting to restart with sudo..."
+	exec sudo "$0" "${AVASILE_ARGV[@]}"
 }
 
-checkiflive() {
+live_check() {
 	# Prevent execution in live environment
 	if [[ -L /dev/mapper/live-base ]]; then
-		eerror "Running in Live mode is unsupported"
-		exit 1
+		die "Avasile cannot run on a live ISO, boot an installed system instead"
 	fi
 }
 
@@ -216,26 +234,17 @@ set_make_conf_symlink() {
 	ln -sf "${PORTAGE_GITDIR}/${conf_variant}" "${make_conf_path}/$(find_make_conf_name)"
 }
 
-chrootchecksum() {
+checksum_chroot_verify() {
 	# Verify core squashfs integrity
-	while true; do
-		if [[ -f "${chrootx64}" && -f "${chrootx64md5}" ]]; then
-			einfo "Found squashed chroot and checksum file"
-			
-			if md5sum -c "${chrootx64md5}" >/dev/null 2>&1; then
-				einfo "Squashed chroot checksum verification passed"
-				sleep 1
-				break
-			else
-				eerror "Squashed chroot checksum verification failed"
-				exit 1
-			fi
-		else
-			eerror "Missing squashed chroot or checksum file"
-			eerror "Expected files: ${chrootx64}, ${chrootx64md5}"
-			exit 1
-		fi
-	done
+	if [[ ! -f "${chrootx64}" || ! -f "${chrootx64md5}" ]]; then
+		eerror "Missing squashed chroot or checksum file"
+		die "Expected files: ${chrootx64}, ${chrootx64md5}"
+	fi
+
+	einfo "Found squashed chroot and checksum file"
+	md5sum -c "${chrootx64md5}" >/dev/null 2>&1 || die "Squashed chroot checksum verification failed"
+	einfo "Squashed chroot checksum verification passed"
+	short_pause
 }
 
 # =============================================================================
@@ -244,50 +253,23 @@ chrootchecksum() {
 
 chrootprepare() {
 	# Create fresh overlay mount environment
-	local directories=("${rodir}" "${rwdir}" "${workdir}" "${overlaydir}")
-	
-	while true; do
-		for dir in "${directories[@]}"; do
-			if [[ ! -d "${dir}" ]]; then
-				mkdir -p "${dir}"
-			fi
-		done
-		
-		local all_exist=true
-		for dir in "${directories[@]}"; do
-			if [[ ! -d "${dir}" ]]; then
-				all_exist=false
-				break
-			fi
-		done
-		
-		if [[ "${all_exist}" == "true" ]]; then
-			chrootstart
-			break
-		else
-			einfo "Directory creation failed, cleaning up and retrying..."
-			chrootstop
-			for dir in "${directories[@]}"; do
-				rm -rf "${dir}"
-			done
-			continue
-		fi
-	done
+	mkdir -p "${READ_ONLY_DIR}" "${READ_WRITE_DIR}" "${WORK_DIR}" "${OVERLAY_DIR}" || return 1
+	chrootstart
 }
 
-chrootstop() {
+umount_chroot() {
 	# Unmount chroot overlay filesystem
 	local mount_points=(
-		"${overlaydir}/proc"
-		"${overlaydir}/sys"
-		"${overlaydir}/dev/pts"
-		"${overlaydir}/dev/shm"
-		"${overlaydir}/dev"
-		"${overlaydir}/tmp"
-		"${overlaydir}/var/cache/binpkgs"
-		"${overlaydir}/var/cache/distfiles"
-		"${overlaydir}"
-		"${rodir}"
+		"${OVERLAY_DIR}/proc"
+		"${OVERLAY_DIR}/sys"
+		"${OVERLAY_DIR}/dev/pts"
+		"${OVERLAY_DIR}/dev/shm"
+		"${OVERLAY_DIR}/dev"
+		"${OVERLAY_DIR}/tmp"
+		"${OVERLAY_DIR}/var/cache/binpkgs"
+		"${OVERLAY_DIR}/var/cache/distfiles"
+		"${OVERLAY_DIR}"
+		"${READ_ONLY_DIR}"
 	)
 	
 	for mount_point in "${mount_points[@]}"; do
@@ -297,43 +279,43 @@ chrootstop() {
 
 chrootstart() {
     # Mount core squashfs in overlay configuration
-    mount -t squashfs "${chrootx64}" "${rodir}"
+    mount -t squashfs "${chrootx64}" "${READ_ONLY_DIR}" || return 1
     mount -t overlay \
-        -o lowerdir="${rodir}",upperdir="${rwdir}",workdir="${workdir}" \
-        overlay "${overlaydir}"
-    
-    mkdir -p "${overlaydir}/var/cache/binpkgs"
-    mkdir -p "${overlaydir}/var/cache/distfiles"
-    mount -o bind,ro packages "${overlaydir}/var/cache/binpkgs"
-    mount -o bind,ro distfiles "${overlaydir}/var/cache/distfiles"
+        -o lowerdir="${READ_ONLY_DIR}",upperdir="${READ_WRITE_DIR}",workdir="${WORK_DIR}" \
+        overlay "${OVERLAY_DIR}" || return 1
+
+    mkdir -p "${OVERLAY_DIR}/var/cache/binpkgs"
+    mkdir -p "${OVERLAY_DIR}/var/cache/distfiles"
+    mount -o bind,ro packages "${OVERLAY_DIR}/var/cache/binpkgs" || return 1
+    mount -o bind,ro distfiles "${OVERLAY_DIR}/var/cache/distfiles" || return 1
     
     # Mount virtual filesystems
-    mount -t proc proc "${overlaydir}/proc"
-    mount -t sysfs sysfs "${overlaydir}/sys"
+    mount -t proc proc "${OVERLAY_DIR}/proc"
+    mount -t sysfs sysfs "${OVERLAY_DIR}/sys"
     mount -t devtmpfs \
         -o relatime,size=3055348k,nr_inodes=763837,mode=755 \
-        none "${overlaydir}/dev"
+        none "${OVERLAY_DIR}/dev"
     mount -t devpts \
         -o nosuid,noexec,relatime,gid=5,mode=620 \
-        none "${overlaydir}/dev/pts"
+        none "${OVERLAY_DIR}/dev/pts"
     mount -t tmpfs \
         -o nosuid,nodev \
-        none "${overlaydir}/dev/shm"
+        none "${OVERLAY_DIR}/dev/shm"
     mount -t tmpfs \
         -o nosuid,nodev,noexec \
-        none "${overlaydir}/tmp"
+        none "${OVERLAY_DIR}/tmp"
 }
 
 chrootdevtree() {
 	# Initialize portage tree and overlay in chroot
-	chroot "${overlaydir}" su - "${chrootuser}" -c "${chrootsrcmode}"
+	chroot "${OVERLAY_DIR}" su - "${chrootuser}" -c "${chrootsrcmode}"
 }
 
 chrootbuild() {
 	# Build and install packages in chroot environment
 	einfo "Starting package build process..."
-	sleep 1
-	chroot "${overlaydir}" su - "${chrootuser}" -c "${chrootbuildtarget}"
+	short_pause
+	chroot "${OVERLAY_DIR}" su - "${chrootuser}" -c "emerge -kav $*"
 }
 
 chrootx64_iso() {
@@ -349,24 +331,32 @@ chrootx64_iso() {
 	einfo "- Commit your changes before exit"
 	einfo "========================================"
 	
-	chroot "${overlaydir}" su - "${chrootuser}"
+	chroot "${OVERLAY_DIR}" su - "${chrootuser}"
 }
 
 regenerate_cache() {
-	env-update
-	# shellcheck source=/dev/null
-	. /etc/profile
+	env-update && source /etc/profile
 }
 
 makepkg() {
 	# Main package building workflow
-	checkroot
-	chrootchecksum
-	chrootprepare
-	chrootdevtree
-	chrootbuild
+	local build_rc
+
+	verify_root_priv
+	kernelconfig
+	checksum_chroot_verify
+
+	if ! chrootprepare || ! chrootdevtree; then
+		eerror "The build chroot could not be set up, unmounting it"
+		umount_chroot
+		return 1
+	fi
+
+	chrootbuild "$@"
+	build_rc=$?
 	chrootx64_iso
-	chrootstop
+	umount_chroot
+	return "${build_rc}"
 }
 
 # =============================================================================
@@ -434,7 +424,7 @@ isozerofree() {
 
 	sync
 	while mountpoint -q "${ISO_RSYNC_TARGET}" && [[ ${tries} -lt 10 ]] ; do
-		umount "${ISO_RSYNC_TARGET}" >/dev/null 2>&1 || sleep 1
+		umount "${ISO_RSYNC_TARGET}" >/dev/null 2>&1 || short_pause
 		tries=$((tries + 1))
 	done
 
@@ -447,7 +437,7 @@ isozerofree() {
 
 	if ! command -v zerofree > /dev/null 2>&1 ; then
 		ewarn "sys-fs/zerofree is not installed, free space will not be zeroed"
-		ewarn "deleted packages stay in ${img} and do not compress away"
+		ewarn "deleted packages stay in ${img} and do not compress correctly"
 		return 1
 	fi
 
@@ -457,23 +447,23 @@ isozerofree() {
 
 isousertree() {
 	# Initialize portage tree and overlay in ISO environment
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${isobinmode}"
+	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_BINARY_SETUP}"
 }
 
 isoramfs() {
 	# Generate ISO initramfs with live boot modules
-	rm -f "${ISO_RSYNC_TARGET}/boot/${isoramfsname}"
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${isoramfscmd}"
+	rm -f "${ISO_RSYNC_TARGET}/boot/${ISO_RAMFS_NAME}"
+	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_RAMFS_CMD}"
 }
 
 isoefiimg() {
 	# Generate EFI bootloader
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${isoeficmd}"
+	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_EFI_CMD}"
 }
 
 isochainloader() {
 	# Generate GRUB chainloader for unetbootin compatibility
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${isochainloadcmd}"
+	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_CHAINLOAD_CMD}"
 }
 
 isoservices() {
@@ -484,11 +474,9 @@ isoservices() {
 		"argentlive"
 		"argent-config-vbox"
 		"avahi-daemon"
-		"connman"
 		"cups"
 		"dkms"
 		"dm-event"
-		"lvm2-lvmetad"
 		"lvm2-monitor"
 		"NetworkManager"
 		"ModemManager"
@@ -556,7 +544,7 @@ isochroot() {
 	einfo "ISO ENVIRONMENT SETUP"
 	einfo "========================================"
 	
-	if [[ -z "${*:2}" ]]; then
+	if [[ $# -eq 0 ]]; then
 		einfo "Interactive mode:"
 		einfo "- Install apps and targets"
 		einfo "- Configure desktop environment"
@@ -576,7 +564,7 @@ isochroot() {
 		fi
 		
 		# Combine all package lists
-		for package_list in "${@:2}"; do
+		for package_list in "$@"; do
 			if [[ -f "${package_list}" ]]; then
 				cat "${package_list}" >> "${ISO_RSYNC_TARGET}/ISO_Installed_Packages"
 			else
@@ -624,12 +612,13 @@ prepareiso() {
     local image_size=20480
     
     einfo "Creating base filesystem image (${image_size}MB / 20GiB)..."
-    dd if=/dev/zero of="${ISO_RSYNC_TARGET}.img" bs=1M count="${image_size}" status=progress
-    mkfs.ext4 -F -m 0 "${ISO_RSYNC_TARGET}.img"
+    dd if=/dev/zero of="${ISO_RSYNC_TARGET}.img" bs=1M count="${image_size}" status=progress \
+        || die "Could not create ${ISO_RSYNC_TARGET}.img"
+    mkfs.ext4 -F -m 0 "${ISO_RSYNC_TARGET}.img" || die "mkfs.ext4 failed on ${ISO_RSYNC_TARGET}.img"
 
     einfo "Mounting core squashfs and syncing contents..."
-    mount -t squashfs "${chrootx64}" "${ISO_RSYNC_SOURCE}"
-    mount -t ext4 "${ISO_RSYNC_TARGET}.img" "${ISO_RSYNC_TARGET}"
+    mount -t squashfs "${chrootx64}" "${ISO_RSYNC_SOURCE}" || die "Could not mount ${chrootx64}"
+    mount -t ext4 "${ISO_RSYNC_TARGET}.img" "${ISO_RSYNC_TARGET}" || die "Could not mount ${ISO_RSYNC_TARGET}.img"
 
     einfo "Syncing filesystem contents..."
     if rsync -aHAXr --inplace --no-whole-file "${ISO_RSYNC_SOURCE}/" "${ISO_RSYNC_TARGET}/"; then
@@ -640,24 +629,11 @@ prepareiso() {
     fi
     
     einfo "Preparing kernel for live boot..."
-    if [[ ! -f "${ISO_RSYNC_TARGET}/boot/${isokernelname}" ]]; then
-        ewarn "Kernel not found, generating with dracut..."
-        dracut -H -f \
-			-o systemd -o systemd-initrd -o systemd-networkd \
-			-o dracut-systemd -o plymouth \
-			--early-microcode --kver="${kernelver}" \
-			"${ISO_RSYNC_TARGET}/boot/${isokernelname}"
-		
-		if [[ -f "${ISO_RSYNC_TARGET}/boot/${isokernelname}" ]]; then
-			cp -avx "${ISO_RSYNC_TARGET}/boot/${isokernelname}" "${ISO_ROOT_DIR}/boot/vmlinuz"
-		else
-			eerror "Failed to generate kernel"
-			exit 1
-		fi
-    else
-        einfo "Using existing kernel..."
-        cp -avx "${ISO_RSYNC_TARGET}/boot/${isokernelname}" "${ISO_ROOT_DIR}/boot/vmlinuz"
+    if [[ ! -f "${ISO_RSYNC_TARGET}/boot/${ISO_KERNEL_NAME}" ]]; then
+        die "Kernel ${ISO_KERNEL_NAME} not found in ${chrootx64}, set KERNEL_VERSION to a kernel the core squashfs contains"
     fi
+    einfo "Using existing kernel..."
+    cp -avx "${ISO_RSYNC_TARGET}/boot/${ISO_KERNEL_NAME}" "${ISO_ROOT_DIR}/boot/vmlinuz"
     
     einfo "Setting up portage configuration in chroot..."
     isostart
@@ -674,9 +650,9 @@ prepareiso() {
         eerror "dracut exited ${ramfs_rc} while generating the live initramfs"
         isoumountall
         exit 1
-    elif [[ -f "${ISO_RSYNC_TARGET}/boot/${isoramfsname}" ]]; then
+    elif [[ -f "${ISO_RSYNC_TARGET}/boot/${ISO_RAMFS_NAME}" ]]; then
         einfo "Moving initramfs to final location..."
-        mv "${ISO_RSYNC_TARGET}/boot/${isoramfsname}" "${ISO_ROOT_DIR}/boot/initrd"
+        mv "${ISO_RSYNC_TARGET}/boot/${ISO_RAMFS_NAME}" "${ISO_ROOT_DIR}/boot/initrd"
     else
         eerror "Failed to generate initramfs"
         exit 1
@@ -736,7 +712,7 @@ prepareiso() {
     einfo "Creating compressed squashfs overlay..."
     mksquashfs "${ISO_CDROOT_DIR}" "${ISO_ROOT_DIR}/squashfs.img" \
         -b 1048576 -comp xz -Xdict-size 100% -Xbcj x86 \
-        -no-duplicates -no-recovery
+        -no-duplicates -no-recovery || die "mksquashfs failed"
     mv "${ISO_ROOT_DIR}/squashfs.img" "${ISO_SQUASHFS_DIR}/"
     
     einfo "========================================"
@@ -765,7 +741,7 @@ bootloaderiso() {
 	fi
 }
 
-cleanupiso() {
+iso_cleaning() {
 	einfo "Cleaning up temporary files..."
 	
 	local cleanup_targets=(
@@ -822,14 +798,15 @@ makeiso() {
 	einfo "STARTING ISO CREATION PROCESS"
 	einfo "========================================"
 	
-	checkroot
-	chrootchecksum
+	verify_root_priv
+	kernelconfig
+	checksum_chroot_verify
 	trap isoumountall EXIT INT TERM
-	prepareiso "$@"
-	bootloaderiso
-	cleanupiso
-	makeisoimg
-	
+	prepareiso "$@" || return 1
+	bootloaderiso || return 1
+	iso_cleaning
+	makeisoimg || return 1
+
 	einfo "========================================"
 	einfo "ISO CREATION COMPLETED SUCCESSFULLY"
 	einfo "========================================"
@@ -839,40 +816,31 @@ makeiso() {
 # REPOSITORY MANAGEMENT FUNCTIONS
 # =============================================================================
 
-removeportagetree() {
-	# Remove portage tree while preserving packages and distfiles
-	if [[ -d "${PORTAGE_MAIN_DIR}/.git" ]]; then
-		einfo "Removing Gentoo portage tree (preserving packages and distfiles)"
-		find "${PORTAGE_MAIN_DIR}" -mindepth 1 \
-			-name "packages" -prune -o \
-			-name "distfiles" -prune -o \
-			-exec rm -rf {} \; >/dev/null 2>&1
-	fi
+wipe_repo_tree() {
+	find "${1}" -mindepth 1 -maxdepth 1 ! -name packages ! -name distfiles -exec rm -rf {} +
 }
 
-removeoverlays() {
+remove_gentoo_tree() {
+	# Remove portage tree while preserving packages and distfiles
+	[[ -d "${PORTAGE_MAIN_DIR}/.git" ]] || return 0
+	einfo "Removing Gentoo portage tree (preserving packages and distfiles)"
+	wipe_repo_tree "${PORTAGE_MAIN_DIR}"
+}
+
+remove_argent_overlay() {
 	# Remove Argent overlay
 	einfo "Removing ${releasename}-${releasetarget} overlay"
-	
+
 	if command -v layman >/dev/null 2>&1; then
 		layman -d "${releasename}-${releasetarget}" >/dev/null 2>&1
-		
-		local layman_dir="/var/lib/layman/${releasename}-${releasetarget}"
-		if [[ -d "${layman_dir}" ]]; then
-			rm -rf "${layman_dir}" || die "Failed to remove layman directory"
-		fi
-	elif [[ -e "/var/db/repos/${releasename}-${releasetarget}" ]]; then
-		if [[ -d "${ARGENT_MAIN_DIR}/.git" ]]; then
-			einfo "Removing Argent overlay tree (preserving packages and distfiles)"
-			find "${ARGENT_MAIN_DIR}" -mindepth 1 \
-				-name "packages" -prune -o \
-				-name "distfiles" -prune -o \
-				-exec rm -rf {} \; >/dev/null 2>&1
-		fi
+		rm -rf "/var/lib/layman/${releasename}-${releasetarget}" || die "Failed to remove layman directory"
+	elif [[ -d "${ARGENT_MAIN_DIR}/.git" ]]; then
+		einfo "Removing Argent overlay tree (preserving packages and distfiles)"
+		wipe_repo_tree "${ARGENT_MAIN_DIR}"
 	fi
 }
 
-removeportageconfig() {
+remove_portage_config() {
 	# Remove Argent build system configuration
 	einfo "Removing ${releasename}-${releasetarget} build system"
 	
@@ -892,22 +860,19 @@ removeportageconfig() {
 
 resetmode() {
 	# Reset system to clean state
-	checkroot
-	removeportagetree
-	removeoverlays
-	removeportageconfig
+	verify_root_priv
+	remove_gentoo_tree || return 1
+	remove_argent_overlay || return 1
+	remove_portage_config
 }
 
-fetchportageconfig() {
+fetch_portage_config() {
 	# Fetch Argent build system configuration
 	einfo "Injecting ${releasename}-${releasetarget} build system"
-	
-	pushd /opt >/dev/null 2>&1 || exit 1
-	git clone --branch "${AVASILE_BRANCH:-master}" "${PORTAGE_REPO}"
-	popd >/dev/null 2>&1 || exit 1
+	git clone --branch "${AVASILE_BRANCH:-master}" "${PORTAGE_REPO}" "${PORTAGE_MAIN_CONFDIR}"
 }
 
-fetchfullportagetree() {
+fetch_gentoo_tree_full() {
 	# Fetch complete Gentoo portage tree for development/source modes
 	if [[ ! -d "${PORTAGE_MAIN_DIR}/.git" ]]; then
 		einfo "Injecting full Gentoo portage tree (devmode/srcmode)"
@@ -920,8 +885,8 @@ fetchfullportagetree() {
 		git remote add -t "${AVASILE_BRANCH:-master}" origin https://gitlab.com/argent/portage.git
 
 		einfo "Fetching portage tree (this may take a while)..."
-		git fetch --depth=1 origin "${AVASILE_BRANCH:-master}"
-		git checkout -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}"
+		git fetch --depth=1 origin "${AVASILE_BRANCH:-master}" || return 1
+		git checkout -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}" || return 1
 		
 		# Clean up unnecessary files
 		rm -rf "${PORTAGE_MAIN_DIR}/profiles/updates"
@@ -932,7 +897,7 @@ fetchfullportagetree() {
 	fi
 }
 
-fetchfullargentbuilddir() {
+fetch_portage_config_git() {
 	# Fetch complete Argent build directory for development
 	if [[ ! -e "${PORTAGE_MAIN_CONFDIR}/.git" ]]; then
 		echo
@@ -944,8 +909,8 @@ fetchfullargentbuilddir() {
 		
 		git init >/dev/null 2>&1
 		git remote add -t "${AVASILE_BRANCH:-master}" origin "${PORTAGE_REPO}"
-		git fetch --depth=1 origin "${AVASILE_BRANCH:-master}"
-		git checkout -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}"
+		git fetch --depth=1 origin "${AVASILE_BRANCH:-master}" || return 1
+		git checkout -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}" || return 1
 		
 		einfo "Argent build directory sync completed"
 	else
@@ -953,7 +918,7 @@ fetchfullargentbuilddir() {
 	fi
 }
 
-fetchminimalportagetree() {
+fetch_gentoo_tree_minimal() {
     # Fetch minimal portage tree for user mode
     # Only includes profiles, metadata, and eclasses - no ebuilds
     if [[ ! -d "${PORTAGE_MAIN_DIR}" ]]; then
@@ -974,8 +939,8 @@ fetchminimalportagetree() {
         git config remote.origin.promisor true
         git config remote.origin.partialCloneFilter blob:none
 
-        git fetch --depth=1 --filter=blob:none origin "${AVASILE_BRANCH:-master}"
-        git checkout -f -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}"
+        git fetch --depth=1 --filter=blob:none origin "${AVASILE_BRANCH:-master}" || return 1
+        git checkout -f -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}" || return 1
 
         git sparse-checkout init --cone
         git sparse-checkout set profiles metadata eclass
@@ -999,7 +964,7 @@ fetchminimalportagetree() {
     fi
 }
 
-fetchminimalargenttree() {
+fetch_argent_overlay_minimal() {
     # Fetch minimal Argent overlay tree for user mode
     # Only includes profiles, metadata, and eclasses
     if [[ ! -d "${ARGENT_MAIN_DIR}" ]]; then
@@ -1018,8 +983,8 @@ fetchminimalargenttree() {
         git config remote.origin.promisor true
         git config remote.origin.partialCloneFilter blob:none
 
-        git fetch --depth=1 --filter=blob:none origin "${AVASILE_BRANCH:-master}"
-        git checkout -f -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}"
+        git fetch --depth=1 --filter=blob:none origin "${AVASILE_BRANCH:-master}" || return 1
+        git checkout -f -B "${AVASILE_BRANCH:-master}" --track "origin/${AVASILE_BRANCH:-master}" || return 1
 
         # Configure sparse checkout properly
         git sparse-checkout init --cone
@@ -1042,7 +1007,7 @@ fetchminimalargenttree() {
     fi
 }
 
-fetchoverlays() {
+fetch_argent_overlay() {
 	# Fetch Argent overlay using appropriate method
 	einfo "Injecting ${releasename}-${releasetarget} overlay"
 
@@ -1209,83 +1174,35 @@ regen_pkg_keys() {
 	fi
 }
 
-setbinmodeconfig() {
-	# Configure system for binary-only mode (usermode)
-	# Uses precompiled packages from binhost exclusively
-	einfo "Configuring binary mode (usermode)"
-	
-	ln -sf "${PORTAGE_GITDIR}" "${PORTAGE_LINK_CONFDIR}"
-	set_make_conf_symlink "make.conf.amd64-user"
-	
+apply_mode_config() {
+	local conf="${1}" scope="${2}"
+
+	if [[ "${scope}" == "central" ]]; then
+		ln -sf "${PORTAGE_GITDIR}" "${PORTAGE_LINK_CONFDIR}"
+	fi
+	set_make_conf_symlink "${conf}"
+	if [[ "${scope}" == "decentral" ]]; then
+		ln -sf "${PORTAGE_LINK_CONFDIR}/binhost-main.conf" "${PORTAGE_LINK_CONFDIR}/binhost.conf"
+	fi
+
 	# Set appropriate Gentoo profile
-	eselect profile set "default/linux/amd64/23.0/desktop/plasma/systemd"
-	
-	# Update environment
-	env-update
-	source /etc/profile
-	
-	refresh_pkg_keys
-	einfo "Binary mode configuration completed"
+	eselect profile set "${PORTAGE_PROFILE}" || return 1
+
+	# Update env cache and source everything back to profile
+	regenerate_cache
+
+	if [[ "${scope}" == "decentral" || "${conf}" != "make.conf.amd64-user" ]]; then
+		ensure_make_conf_local
+	fi
+	if [[ "${scope}" == "central" ]]; then
+		refresh_pkg_keys
+	fi
 }
 
-setmixedmodeconfig() {
-	# Configure system for mixed mode (development)
-	# Prefers binary packages but falls back to source when needed
-	einfo "Configuring mixed mode (development)"
-	
-	ln -sf "${PORTAGE_GITDIR}" "${PORTAGE_LINK_CONFDIR}"
-	set_make_conf_symlink "make.conf.amd64-devel"
-	
-	# Set appropriate Gentoo profile  
-	eselect profile set "default/linux/amd64/23.0/desktop/plasma/systemd"
-	
-	# Update environment
-	env-update
-	source /etc/profile
-
-	ensure_make_conf_local
-	refresh_pkg_keys
-	einfo "Mixed mode configuration completed"
-}
-
-setsrcmodeconfig() {
-	# Configure system for source-only mode
-	# Uses source ebuilds exclusively, ignores binary packages
-	einfo "Configuring source mode"
-	
-	ln -sf "${PORTAGE_GITDIR}" "${PORTAGE_LINK_CONFDIR}"
-	set_make_conf_symlink "make.conf.amd64-srcmode"
-	
-	# Set appropriate Gentoo profile
-	eselect profile set "default/linux/amd64/23.0/desktop/plasma/systemd"
-	
-	# Update environment
-	env-update
-	source /etc/profile
-
-	ensure_make_conf_local
-	refresh_pkg_keys
-	einfo "Source mode configuration completed"
-}
-
-setsrcmodecustom() {
-	# Configure system for custom source mode
-	# Full control over USE flags and compilation options
-	einfo "Configuring custom source mode"
-	
-	ln -sf "${PORTAGE_GITDIR}" "${PORTAGE_LINK_CONFDIR}"
-	set_make_conf_symlink "make.conf.amd64-custom"
-	
-	# Set appropriate Gentoo profile
-	eselect profile set "default/linux/amd64/23.0/desktop/plasma/systemd"
-	
-	# Update environment
-	env-update
-	source /etc/profile
-
-	ensure_make_conf_local
-	refresh_pkg_keys
-	einfo "Custom source mode configuration completed"
+make_custom_conf() {
+	if [[ ! -e "${PORTAGE_GITDIR}/make.conf.amd64-custom" ]]; then
+		cp "${PORTAGE_GITDIR}/make.conf.amd64-devel" "${PORTAGE_GITDIR}/make.conf.amd64-custom"
+	fi
 }
 
 # ============================================================================
@@ -1308,76 +1225,46 @@ check_portage_directory() {
 	fi
 }
 
-binmode() {
-	# Initialize binary-only mode (usermode)
-	einfo "Setting up binary mode (usermode)"
-	
-	check_portage_directory
-	resetmode
-	fetchportageconfig
-	fetchminimalportagetree
-	fetchminimalargenttree
-	setbinmodeconfig
-	
-	einfo "Binary mode setup completed"
-}
+setup_mode() {
+	local mode="${1}"
+	local name="${AVASILE_MODE_NAME[${mode}]}"
 
-mixedmode() {
-	# Initialize mixed development mode
-	einfo "Setting up mixed mode (development)"
-	
-	check_portage_directory
-	resetmode
-	fetchportageconfig
-	fetchfullportagetree
-	setmixedmodeconfig
-	fetchoverlays
-	
-	einfo "Mixed mode setup completed"
-}
+	verify_root_priv
+	einfo "Setting up ${name}"
 
-srcmode() {
-	# Initialize source-only mode
-	einfo "Setting up source mode"
-	
 	check_portage_directory
-	resetmode
-	fetchportageconfig
-	fetchfullportagetree
-	setsrcmodeconfig
-	fetchoverlays
-	
-	einfo "Source mode setup completed"
-}
+	resetmode || return 1
+	fetch_portage_config || return 1
 
-srccustom() {
-	# Initialize custom source mode with user-defined configuration
-	einfo "Setting up custom source mode"
-	
-	check_portage_directory
-	resetmode
-	fetchportageconfig
-	fetchfullportagetree
-	fetchoverlays
-	
-	echo
-	if [[ -e "${PORTAGE_MAIN_CONFDIR}" ]]; then
-		# Create custom configuration if it doesn't exist
-		if [[ ! -e "${PORTAGE_LINK_CONFDIR}/make.conf.amd64-custom" ]]; then
-			cp "${PORTAGE_LINK_CONFDIR}/make.conf.amd64-devel" "${PORTAGE_LINK_CONFDIR}/make.conf.amd64-custom"
-		fi
-		
+	if [[ "${mode}" == "binpkgmode" ]]; then
+		fetch_gentoo_tree_minimal || return 1
+		fetch_argent_overlay_minimal || return 1
+	else
+		fetch_gentoo_tree_full || return 1
+	fi
+
+	if [[ "${mode}" == "srccustom" ]]; then
+		make_custom_conf
+
 		# Clean up git history for custom configuration
 		rm -rf "${PORTAGE_MAIN_CONFDIR}/.git"
-		
+
 		# Remove default package configuration
-		rm -rf "${PORTAGE_MAIN_CONFDIR}/conf/intel/portage/package.accept_keywords/"*
-		rm -rf "${PORTAGE_MAIN_CONFDIR}/conf/intel/portage/package.use/"*
+		rm -rf "${PORTAGE_GITDIR}/package.accept_keywords/"*
+		rm -rf "${PORTAGE_GITDIR}/package.use/"*
 	fi
-	echo
-	
-	setsrcmodecustom
-	einfo "Custom source mode setup completed"
+
+	apply_mode_config "${AVASILE_MODE_CONF[${mode}]}" central || return 1
+
+	if [[ "${mode}" != "binpkgmode" ]]; then
+		fetch_argent_overlay || return 1
+	fi
+
+	if [[ -n "${AVASILE_BRANCH}" ]]; then
+		switch_repo_branch || return 1
+	fi
+
+	einfo "Finished setting up ${name}"
 }
 
 
@@ -1385,126 +1272,29 @@ srccustom() {
 # Decentralized Mode Functions
 # ============================================================================
 
-decentralized_user() {
-	# Configure decentralized user mode - independent precompiled system
-	einfo "Configuring decentralized user mode"
-	
-	if [[ -e "${PORTAGE_MAIN_CONFDIR}" ]]; then
-		# Configure for binary packages
-		set_make_conf_symlink "make.conf.amd64-user"
-		ln -sf "${PORTAGE_LINK_CONFDIR}/binhost-main.conf" "${PORTAGE_LINK_CONFDIR}/binhost.conf"
-		
-		# Set Gentoo profile
-		eselect profile set "default/linux/amd64/23.0/desktop/plasma/systemd"
-		
-		# Update environment
-		env-update
-		source /etc/profile
+decentralized_mode() {
+	local mode="${1}"
+	local name="${AVASILE_MODE_NAME[${mode}]}"
 
-		ensure_make_conf_local
-		einfo "Decentralized user mode configured"
-	else
+	einfo "Configuring decentralized ${name}"
+
+	if [[ ! -e "${PORTAGE_MAIN_CONFDIR}" ]]; then
 		ewarn "Clone directory not found: ${PORTAGE_MAIN_CONFDIR}"
+		return 1
 	fi
-}
 
-decentralized_devel() {
-	# Configure decentralized development mode
-	einfo "Configuring decentralized development mode"
-	
-	if [[ -e "${PORTAGE_MAIN_CONFDIR}" ]]; then
-		# Configure for mixed binary/source usage
-		set_make_conf_symlink "make.conf.amd64-devel"
-		ln -sf "${PORTAGE_LINK_CONFDIR}/binhost-main.conf" "${PORTAGE_LINK_CONFDIR}/binhost.conf"
-		
-		# Set Gentoo profile
-		eselect profile set "default/linux/amd64/23.0/desktop/plasma/systemd"
-		
-		# Update environment
-		env-update
-		source /etc/profile
-
-		ensure_make_conf_local
-		einfo "Decentralized development mode configured"
-	else
-		ewarn "Clone directory not found: ${PORTAGE_MAIN_CONFDIR}"
+	if [[ "${mode}" == "srccustom" ]]; then
+		make_custom_conf
 	fi
-}
-
-decentralized_source() {
-	# Configure decentralized source-only mode
-	einfo "Configuring decentralized source mode"
-	
-	if [[ -e "${PORTAGE_MAIN_CONFDIR}" ]]; then
-		# Configure for source-only compilation
-		set_make_conf_symlink "make.conf.amd64-srcmode"
-		ln -sf "${PORTAGE_LINK_CONFDIR}/binhost-main.conf" "${PORTAGE_LINK_CONFDIR}/binhost.conf"
-		
-		# Set Gentoo profile
-		eselect profile set "default/linux/amd64/23.0/desktop/plasma/systemd"
-		
-		# Update environment
-		env-update
-		source /etc/profile
-
-		ensure_make_conf_local
-		einfo "Decentralized source mode configured"
-	else
-		ewarn "Clone directory not found: ${PORTAGE_MAIN_CONFDIR}"
-	fi
-}
-
-decentralized_custom() {
-	# Configure decentralized custom mode
-	einfo "Configuring decentralized custom mode"
-	
-	if [[ -e "${PORTAGE_MAIN_CONFDIR}" ]]; then
-		# Create custom configuration if needed
-		if [[ ! -e "${PORTAGE_LINK_CONFDIR}/make.conf.amd64-custom" ]]; then
-			cp "${PORTAGE_LINK_CONFDIR}/make.conf.amd64-devel" "${PORTAGE_LINK_CONFDIR}/make.conf.amd64-custom"
-		fi
-		
-		# Configure for custom usage
-		set_make_conf_symlink "make.conf.amd64-custom"
-		ln -sf "${PORTAGE_LINK_CONFDIR}/binhost-main.conf" "${PORTAGE_LINK_CONFDIR}/binhost.conf"
-		
-		# Set Gentoo profile
-		eselect profile set "default/linux/amd64/23.0/desktop/plasma/systemd"
-		
-		# Update environment
-		env-update
-		source /etc/profile
-
-		ensure_make_conf_local
-		einfo "Decentralized custom mode configured"
-	else
-		ewarn "Clone directory not found: ${PORTAGE_MAIN_CONFDIR}"
-	fi
+	apply_mode_config "${AVASILE_MODE_CONF[${mode}]}" decentral || return 1
+	einfo "Decentralized ${name} configured"
 }
 
 decentralized_gentoo() {
 	# Configure pure Gentoo mode - complete independence from Argent
 	ewarn "Configuring pure Gentoo mode (one-way operation!)"
-	
-	if [[ -e "${PORTAGE_MAIN_CONFDIR}" ]]; then
-		# Create custom configuration if needed
-		if [[ ! -e "${PORTAGE_LINK_CONFDIR}/make.conf.amd64-custom" ]]; then
-			cp "${PORTAGE_LINK_CONFDIR}/make.conf.amd64-devel" "${PORTAGE_LINK_CONFDIR}/make.conf.amd64-custom"
-		fi
-		
-		# Configure for pure Gentoo
-		set_make_conf_symlink "make.conf.amd64-custom"
-		ln -sf "${PORTAGE_LINK_CONFDIR}/binhost-main.conf" "${PORTAGE_LINK_CONFDIR}/binhost.conf"
-		
-		# Set Gentoo profile
-		eselect profile set "default/linux/amd64/23.0/desktop/plasma/systemd"
-		
-		# Update environment
-		env-update
-		source /etc/profile
 
-		ensure_make_conf_local
-	fi
+	decentralized_mode srccustom
 	
 	# Remove Argent-specific git configuration
 	rm -rf "${PORTAGE_LINK_CONFDIR}/.git"
