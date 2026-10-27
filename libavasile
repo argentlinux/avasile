@@ -8,12 +8,14 @@
 # Maintainer: Stefan Cristian B. <stefan.cristian@rogentos.ro>
 # =============================================================================
 
+GENTOO_FUNCTIONS="/lib/gentoo/functions.sh"
+
 # Import Gentoo functions
-if [[ ! -r /lib/gentoo/functions.sh ]]; then
-	echo "avasile: /lib/gentoo/functions.sh not found, install sys-apps/gentoo-functions" >&2
+if [[ ! -r "${GENTOO_FUNCTIONS}" ]]; then
+	echo "avasile: ${GENTOO_FUNCTIONS} not found, install sys-apps/gentoo-functions" >&2
 	exit 1
 fi
-source /lib/gentoo/functions.sh
+source "${GENTOO_FUNCTIONS}"
 
 export AVASILE_VERBOSE="${AVASILE_VERBOSE:-0}"
 if [[ "${AVASILE_VERBOSE}" -eq 1 ]]; then
