@@ -27,17 +27,17 @@ fi
 # =============================================================================
 
 # Release Information
-export releasename="argent"
-export releasetarget="ws"
-export releaseversion="1"
+export ARGENT_EDITION_NAME="argent"
+export ARGENT_RELEASE_TARGET="ws"
+export ARGENT_RELEASE_VERSION="1"
 
 # Kernel Configuration
 export KERNEL_VERSION="${KERNEL_VERSION:-6.12.110}"
-export kernelver="${KERNEL_VERSION}-${releasename}"
+export KERNEL_RELEASE_VER="${KERNEL_VERSION}-${ARGENT_EDITION_NAME}"
 
 # Core SquashFS Configuration
-export chrootx64="${releasename}_${releasetarget}_${releaseversion}_core_x64.squashfs"
-export chrootx64md5="${chrootx64}.md5"
+export CORE_SQUASHFS="${ARGENT_EDITION_NAME}_${ARGENT_RELEASE_TARGET}_${ARGENT_RELEASE_VERSION}_core_x64.squashfs"
+export CORE_SQUASHFS_MD5="${CORE_SQUASHFS}.md5"
 
 # Overlay Mount Directories
 export READ_ONLY_DIR="rodir"
@@ -46,21 +46,21 @@ export WORK_DIR="workdir"
 export OVERLAY_DIR="overlaydir"
 
 # Build Environment Variables
-export chrootuser="root"
-export chrootsrcmode="avasile --srcmode"
+export BUILD_CHROOT_USER="root"
+export BUILD_SOURCE_SETUP="avasile --srcmode"
 
 # ISO Creation Variables
-export isouser="root"
-export isomainarch="x86_64"
+export ISO_CHROOT_USER="root"
+export ISO_ARCH="x86_64"
 export ISO_BINARY_SETUP="avasile --usermode"
-export ISO_KERNEL_NAME="kernel-genkernel-${isomainarch}-${kernelver}"
-export ISO_RAMFS_NAME="initramfs-genkernel-${isomainarch}-${kernelver}"
+export ISO_KERNEL_NAME="kernel-genkernel-${ISO_ARCH}-${KERNEL_RELEASE_VER}"
+export ISO_RAMFS_NAME="initramfs-genkernel-${ISO_ARCH}-${KERNEL_RELEASE_VER}"
 
 # ISO Commands
 export ISO_RAMFS_CMD="dracut -N -a dmsquash-live -a pollcdrom -a mdraid \
     -o systemd -o systemd-initrd -o systemd-networkd -o dracut-systemd \
     -o btrfs -o crypt -o i18n -o usrmount -o lunmask -o nvdimm -o multipath \
-    --force --kver ${kernelver} /boot/${ISO_RAMFS_NAME}"
+    --force --kver ${KERNEL_RELEASE_VER} /boot/${ISO_RAMFS_NAME}"
 
 export ISO_EFI_CMD="grub-mkimage -d /usr/lib/grub/x86_64-efi -o bootx64.efi \
     -O x86_64-efi ext2 fat udf btrfs ntfs reiserfs xfs hfsplus lvm ata \
@@ -74,7 +74,7 @@ export ISO_CHAINLOAD_CMD="grub-mkimage -d /usr/lib/grub/i386-pc -o core.img \
 # ISO Directory Layout
 export BOOTLOADER_FETCH_PATH="/tmp/bootcore"
 export BOOTLOADER_CONFIGS="${BOOTLOADER_FETCH_PATH}/cdroot/boot"
-export ISO_ROOT_DIR="${releasename}-${releasetarget}-${releaseversion}-${isomainarch}"
+export ISO_ROOT_DIR="${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET}-${ARGENT_RELEASE_VERSION}-${ISO_ARCH}"
 export ISO_GRUB_DIR="${ISO_ROOT_DIR}/boot/grub"
 export ISO_EFI_DIR="${ISO_ROOT_DIR}/efi/boot"
 export ISO_RSYNC_TARGET="${ISO_ROOT_DIR}/rootfs"
@@ -238,13 +238,13 @@ set_make_conf_symlink() {
 
 checksum_chroot_verify() {
 	# Verify core squashfs integrity
-	if [[ ! -f "${chrootx64}" || ! -f "${chrootx64md5}" ]]; then
+	if [[ ! -f "${CORE_SQUASHFS}" || ! -f "${CORE_SQUASHFS_MD5}" ]]; then
 		eerror "Missing squashed chroot or checksum file"
-		die "Expected files: ${chrootx64}, ${chrootx64md5}"
+		die "Expected files: ${CORE_SQUASHFS}, ${CORE_SQUASHFS_MD5}"
 	fi
 
 	einfo "Found squashed chroot and checksum file"
-	md5sum -c "${chrootx64md5}" >/dev/null 2>&1 || die "Squashed chroot checksum verification failed"
+	md5sum -c "${CORE_SQUASHFS_MD5}" >/dev/null 2>&1 || die "Squashed chroot checksum verification failed"
 	einfo "Squashed chroot checksum verification passed"
 	short_pause
 }
@@ -281,7 +281,7 @@ umount_chroot() {
 
 chroot_mount() {
     # Mount core squashfs in overlay configuration
-    mount -t squashfs "${chrootx64}" "${READ_ONLY_DIR}" || return 1
+    mount -t squashfs "${CORE_SQUASHFS}" "${READ_ONLY_DIR}" || return 1
     mount -t overlay \
         -o lowerdir="${READ_ONLY_DIR}",upperdir="${READ_WRITE_DIR}",workdir="${WORK_DIR}" \
         overlay "${OVERLAY_DIR}" || return 1
@@ -310,14 +310,14 @@ chroot_mount() {
 
 chroot_tree_sync() {
 	# Initialize portage tree and overlay in chroot
-	chroot "${OVERLAY_DIR}" su - "${chrootuser}" -c "${chrootsrcmode}"
+	chroot "${OVERLAY_DIR}" su - "${BUILD_CHROOT_USER}" -c "${BUILD_SOURCE_SETUP}"
 }
 
 chroot_emerge() {
 	# Build and install packages in chroot environment
 	einfo "Starting package build process..."
 	short_pause
-	chroot "${OVERLAY_DIR}" su - "${chrootuser}" -c "emerge -kav $*"
+	chroot "${OVERLAY_DIR}" su - "${BUILD_CHROOT_USER}" -c "emerge -kav $*"
 }
 
 chrootx64_iso() {
@@ -333,7 +333,7 @@ chrootx64_iso() {
 	einfo "- Commit your changes before exit"
 	einfo "========================================"
 	
-	chroot "${OVERLAY_DIR}" su - "${chrootuser}"
+	chroot "${OVERLAY_DIR}" su - "${BUILD_CHROOT_USER}"
 }
 
 regenerate_cache() {
@@ -449,23 +449,23 @@ isozerofree() {
 
 iso_tree_sync() {
 	# Initialize portage tree and overlay in ISO environment
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_BINARY_SETUP}"
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "${ISO_BINARY_SETUP}"
 }
 
 iso_initrd_gen() {
 	# Generate ISO initramfs with live boot modules
 	rm -f "${ISO_RSYNC_TARGET}/boot/${ISO_RAMFS_NAME}"
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_RAMFS_CMD}"
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "${ISO_RAMFS_CMD}"
 }
 
 iso_efi_gen() {
 	# Generate EFI bootloader
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_EFI_CMD}"
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "${ISO_EFI_CMD}"
 }
 
 iso_grubcore_gen() {
 	# Generate GRUB chainloader for unetbootin compatibility
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "${ISO_CHAINLOAD_CMD}"
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "${ISO_CHAINLOAD_CMD}"
 }
 
 iso_units_enable() {
@@ -488,15 +488,15 @@ iso_units_enable() {
 	
 	# Enable system services
 	for service in "${services[@]}"; do
-		chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "systemctl enable ${service}"
+		chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "systemctl enable ${service}"
 	done
 
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c \
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c \
 		"systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service"
 	
 	# Configure networking
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "rm -f /etc/resolv.conf"
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c \
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "rm -f /etc/resolv.conf"
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c \
 		"ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"
 
 	set +x
@@ -506,18 +506,18 @@ isoinstallmask() {
 	local conf_dir
 	conf_dir="$(dirname "${ISO_LIVE_CONF}")"
 
-	if ! chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "test -d '${conf_dir}'" ; then
+	if ! chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "test -d '${conf_dir}'" ; then
 		eerror "${conf_dir} is missing inside the ISO chroot"
 		exit 1
 	fi
 
 	einfo "We're adding the live INSTALL_MASK: ${ISO_LIVE_CONF}"
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "printf 'INSTALL_MASK=\"\${INSTALL_MASK} %s\"\n' '${ISO_INSTALL_MASK}' > '${ISO_LIVE_CONF}'"
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "printf 'INSTALL_MASK=\"\${INSTALL_MASK} %s\"\n' '${ISO_INSTALL_MASK}' > '${ISO_LIVE_CONF}'"
 }
 
 isoinstallmaskremove() {
 	einfo "Removing the live INSTALL_MASK: ${ISO_LIVE_CONF}"
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "rm -f '${ISO_LIVE_CONF}'"
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "rm -f '${ISO_LIVE_CONF}'"
 }
 
 isoosrelease() {
@@ -536,7 +536,7 @@ isoosrelease() {
 
 isoupdatedone() {
 	einfo "Rebuilding linker cache"
-	chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "ldconfig ; systemd-hwdb update ; journalctl --update-catalog ; touch /etc/.updated /var/.updated" \
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "ldconfig ; systemd-hwdb update ; journalctl --update-catalog ; touch /etc/.updated /var/.updated" \
 		|| ewarn "Could not update linker cache and systemd stuff"
 }
 
@@ -553,9 +553,9 @@ iso_customize() {
 		einfo "- Exit when finished"
 		einfo "========================================"
 		
-		chroot "${ISO_RSYNC_TARGET}" su - "${isouser}"
-		chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "umount -f /mnt/argent_efipart/dev/* 2>/dev/null || true"
-		chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "env-update"
+		chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}"
+		chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "umount -f /mnt/argent_efipart/dev/* 2>/dev/null || true"
+		chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "env-update"
 	else
 		einfo "Automated installation mode"
 		einfo "Installing packages from provided lists..."
@@ -579,15 +579,15 @@ iso_customize() {
 			
 			if [[ ${#iso_packages[@]} -gt 0 ]]; then
 				einfo "Installing ${#iso_packages[@]} packages..."
-				chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "emerge -q ${iso_packages[*]}"
+				chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "emerge -q ${iso_packages[*]}"
 			else
 				ewarn "No packages found in provided lists"
 			fi
 		fi
 		
 		# Cleanup
-		chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "umount -f /mnt/argent_efipart/dev/* 2>/dev/null || true"
-		chroot "${ISO_RSYNC_TARGET}" su - "${isouser}" -c "env-update"
+		chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "umount -f /mnt/argent_efipart/dev/* 2>/dev/null || true"
+		chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "env-update"
 	fi
 }
 
@@ -619,7 +619,7 @@ iso_rootfs_build() {
     mkfs.ext4 -F -m 0 "${ISO_RSYNC_TARGET}.img" || die "mkfs.ext4 failed on ${ISO_RSYNC_TARGET}.img"
 
     einfo "Mounting core squashfs and syncing contents..."
-    mount -t squashfs "${chrootx64}" "${ISO_RSYNC_SOURCE}" || die "Could not mount ${chrootx64}"
+    mount -t squashfs "${CORE_SQUASHFS}" "${ISO_RSYNC_SOURCE}" || die "Could not mount ${CORE_SQUASHFS}"
     mount -t ext4 "${ISO_RSYNC_TARGET}.img" "${ISO_RSYNC_TARGET}" || die "Could not mount ${ISO_RSYNC_TARGET}.img"
 
     einfo "Syncing filesystem contents..."
@@ -632,7 +632,7 @@ iso_rootfs_build() {
     
     einfo "Preparing kernel for live boot..."
     if [[ ! -f "${ISO_RSYNC_TARGET}/boot/${ISO_KERNEL_NAME}" ]]; then
-        die "Kernel ${ISO_KERNEL_NAME} not found in ${chrootx64}, set KERNEL_VERSION to a kernel the core squashfs contains"
+        die "Kernel ${ISO_KERNEL_NAME} not found in ${CORE_SQUASHFS}, set KERNEL_VERSION to a kernel the core squashfs contains"
     fi
     einfo "Using existing kernel..."
     cp -avx "${ISO_RSYNC_TARGET}/boot/${ISO_KERNEL_NAME}" "${ISO_ROOT_DIR}/boot/vmlinuz"
@@ -730,7 +730,7 @@ iso_rootfs_build() {
 iso_bootcfg_fetch() {
 	einfo "Fetching GRUB2 boot configuration..."
 	
-	if git clone "https://gitlab.com/${releasename}/boot-core.git" "${BOOTLOADER_FETCH_PATH}"; then
+	if git clone "https://gitlab.com/${ARGENT_EDITION_NAME}/boot-core.git" "${BOOTLOADER_FETCH_PATH}"; then
 		if [[ -d "${BOOTLOADER_CONFIGS}" ]]; then
 			cp -avx "${BOOTLOADER_CONFIGS}" "${ISO_ROOT_DIR}/"
 			einfo "Boot configuration installed successfully"
@@ -768,7 +768,7 @@ iso_cleaning() {
 
 iso_image_write() {
 	# Create final ISO image
-	local iso_filename="${releasename}-${releasetarget}-${releaseversion}-${isomainarch}.iso"
+	local iso_filename="${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET}-${ARGENT_RELEASE_VERSION}-${ISO_ARCH}.iso"
 	
 	einfo "========================================"
 	einfo "CREATING FINAL ISO IMAGE"
@@ -831,11 +831,11 @@ remove_gentoo_tree() {
 
 remove_argent_overlay() {
 	# Remove Argent overlay
-	einfo "Removing ${releasename}-${releasetarget} overlay"
+	einfo "Removing ${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET} overlay"
 
 	if command -v layman >/dev/null 2>&1; then
-		layman -d "${releasename}-${releasetarget}" >/dev/null 2>&1
-		rm -rf "/var/lib/layman/${releasename}-${releasetarget}" || die "Failed to remove layman directory"
+		layman -d "${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET}" >/dev/null 2>&1
+		rm -rf "/var/lib/layman/${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET}" || die "Failed to remove layman directory"
 	elif [[ -d "${ARGENT_MAIN_DIR}/.git" ]]; then
 		einfo "Removing Argent overlay tree (preserving packages and distfiles)"
 		wipe_repo_tree "${ARGENT_MAIN_DIR}"
@@ -844,7 +844,7 @@ remove_argent_overlay() {
 
 remove_portage_config() {
 	# Remove Argent build system configuration
-	einfo "Removing ${releasename}-${releasetarget} build system"
+	einfo "Removing ${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET} build system"
 	
 	local config_files=(
 		"${PORTAGE_LINK_CONFDIR}/make.profile"
@@ -870,7 +870,7 @@ clear_mode() {
 
 fetch_build_config() {
 	# Fetch Argent build system configuration
-	einfo "Injecting ${releasename}-${releasetarget} build system"
+	einfo "Injecting ${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET} build system"
 	git clone --branch "${AVASILE_BRANCH:-master}" "${PORTAGE_REPO}" "${PORTAGE_MAIN_CONFDIR}"
 }
 
@@ -1011,15 +1011,15 @@ fetch_argent_overlay_minimal() {
 
 fetch_argent_overlay() {
 	# Fetch Argent overlay using appropriate method
-	einfo "Injecting ${releasename}-${releasetarget} overlay"
+	einfo "Injecting ${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET} overlay"
 
 	if command -v layman >/dev/null 2>&1; then
 		# Use layman if available
-		local overlay_url="https://gitlab.com/${releasename}/${releasename}-${releasetarget}/raw/master/overlay.xml"
-		echo y | layman -f -a "${releasename}-${releasetarget}" -o "${overlay_url}"
+		local overlay_url="https://gitlab.com/${ARGENT_EDITION_NAME}/${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET}/raw/master/overlay.xml"
+		echo y | layman -f -a "${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET}" -o "${overlay_url}"
 	else
 		# Use emerge --sync as fallback
-		emerge --sync "${releasename}-${releasetarget}"
+		emerge --sync "${ARGENT_EDITION_NAME}-${ARGENT_RELEASE_TARGET}"
 	fi
 }
 
