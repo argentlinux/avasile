@@ -60,6 +60,7 @@ export ISO_RAMFS_NAME="initramfs-genkernel-${ISO_ARCH}-${KERNEL_RELEASE_VER}"
 export ISO_RAMFS_CMD="dracut -N -a dmsquash-live -a pollcdrom -a mdraid \
     -o systemd -o systemd-initrd -o systemd-networkd -o dracut-systemd \
     -o btrfs -o crypt -o i18n -o usrmount -o lunmask -o nvdimm -o multipath \
+    --omit-drivers nouveau \
     --force --kver ${KERNEL_RELEASE_VER} /boot/${ISO_RAMFS_NAME}"
 
 export ISO_EFI_CMD="grub-mkimage -d /usr/lib/grub/x86_64-efi -o bootx64.efi \
