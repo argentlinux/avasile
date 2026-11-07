@@ -501,11 +501,6 @@ iso_units_enable() {
 	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c \
 		"systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service"
 	
-	# Configure networking
-	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "rm -f /etc/resolv.conf"
-	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c \
-		"ln -s /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"
-
 	set +x
 }
 
@@ -712,6 +707,9 @@ iso_rootfs_build() {
     iso_mount
     iso_units_enable
     iso_umount
+
+    rm -f "${ISO_RSYNC_TARGET}/etc/resolv.conf"
+    ln -s /run/systemd/resolve/stub-resolv.conf "${ISO_RSYNC_TARGET}/etc/resolv.conf"
     
     einfo "Finalizing ISO filesystem..."
     isozerofree
