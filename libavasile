@@ -32,7 +32,7 @@ export ARGENT_RELEASE_TARGET="ws"
 export ARGENT_RELEASE_VERSION="1"
 
 # Kernel Configuration
-export KERNEL_VERSION="${KERNEL_VERSION:-6.12.110}"
+export KERNEL_VERSION="${KERNEL_VERSION:-6.12.115}"
 export KERNEL_RELEASE_VER="${KERNEL_VERSION}-${ARGENT_EDITION_NAME}"
 
 # Core SquashFS Configuration
@@ -459,6 +459,12 @@ iso_initrd_gen() {
 	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "${ISO_RAMFS_CMD}"
 }
 
+iso_kernel_clean() {
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c \
+		"find /lib/modules -mindepth 1 -maxdepth 1 ! -name ${KERNEL_RELEASE_VER} -exec rm -rf {} +"
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "rm -f /boot/initramfs-genkernel-*"
+}
+
 iso_efi_gen() {
 	# Generate EFI bootloader
 	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c "${ISO_EFI_CMD}"
@@ -631,36 +637,11 @@ iso_rootfs_build() {
         exit 1
     fi
     
-    einfo "Preparing kernel for live boot..."
-    if [[ ! -f "${ISO_RSYNC_TARGET}/boot/${ISO_KERNEL_NAME}" ]]; then
-        die "Kernel ${ISO_KERNEL_NAME} not found in ${CORE_SQUASHFS}, set KERNEL_VERSION to a kernel the core squashfs contains"
-    fi
-    einfo "Using existing kernel..."
-    cp -avx "${ISO_RSYNC_TARGET}/boot/${ISO_KERNEL_NAME}" "${ISO_ROOT_DIR}/boot/vmlinuz"
-    
     einfo "Setting up portage configuration in chroot..."
     iso_mount
     iso_tree_sync
     iso_umount
-    
-    einfo "Generating initramfs for live boot..."
-    iso_mount
-    iso_initrd_gen
-    local ramfs_rc=$?
-    iso_umount
 
-    if [[ ${ramfs_rc} -ne 0 ]]; then
-        eerror "dracut exited ${ramfs_rc} while generating the live initramfs"
-        isoumountall
-        exit 1
-    elif [[ -f "${ISO_RSYNC_TARGET}/boot/${ISO_RAMFS_NAME}" ]]; then
-        einfo "Moving initramfs to final location..."
-        mv "${ISO_RSYNC_TARGET}/boot/${ISO_RAMFS_NAME}" "${ISO_ROOT_DIR}/boot/initrd"
-    else
-        eerror "Failed to generate initramfs"
-        exit 1
-    fi
-    
     einfo "Generating EFI bootloader..."
     iso_mount
     iso_efi_gen
@@ -700,8 +681,34 @@ iso_rootfs_build() {
     isoinstallmaskremove
     isoosrelease
     isoupdatedone
+    iso_kernel_clean
     iso_umount
-    
+
+    einfo "Preparing kernel for live boot..."
+    if [[ ! -f "${ISO_RSYNC_TARGET}/boot/${ISO_KERNEL_NAME}" ]]; then
+        die "Kernel ${ISO_KERNEL_NAME} not found in ${ISO_RSYNC_TARGET}/boot, set KERNEL_VERSION to the kernel the ISO installs"
+    fi
+    einfo "Using installed kernel..."
+    cp -avx "${ISO_RSYNC_TARGET}/boot/${ISO_KERNEL_NAME}" "${ISO_ROOT_DIR}/boot/vmlinuz"
+
+    einfo "Generating initramfs for live boot..."
+    iso_mount
+    iso_initrd_gen
+    local ramfs_rc=$?
+    iso_umount
+
+    if [[ ${ramfs_rc} -ne 0 ]]; then
+        eerror "dracut exited ${ramfs_rc} while generating the live initramfs"
+        isoumountall
+        exit 1
+    elif [[ -f "${ISO_RSYNC_TARGET}/boot/${ISO_RAMFS_NAME}" ]]; then
+        einfo "Moving initramfs to final location..."
+        mv "${ISO_RSYNC_TARGET}/boot/${ISO_RAMFS_NAME}" "${ISO_ROOT_DIR}/boot/initrd"
+    else
+        eerror "Failed to generate initramfs"
+        exit 1
+    fi
+
     iso_mount
     iso_units_enable
     iso_umount
