@@ -98,7 +98,7 @@ export ISO_BINPKGS_SOURCE="${ISO_BINPKGS_SOURCE:-/home/work/packages_argent_maki
 export ISO_BINPKGS_TARGET="${ISO_BINPKGS_TARGET:-/var/cache/binhost/binhost-main}"
 
 export ISO_LIVE_CONF="${ISO_LIVE_CONF:-${PORTAGE_LINK_CONFDIR}/make.conf/zz-live.conf}"
-export ISO_INSTALL_MASK="${ISO_INSTALL_MASK:-/usr/share/doc /usr/share/man /usr/share/info /usr/share/gtk-doc /usr/share/devhelp /usr/share/help /usr/lib/debug /usr/src/debug *.la *.a -libgcc.a -libgcc_eh.a -libgcov.a -libc_nonshared.a -libmvec_nonshared.a}"
+export ISO_INSTALL_MASK="${ISO_INSTALL_MASK:-/usr/share/doc /usr/share/man /usr/share/info /usr/share/gtk-doc /usr/share/devhelp /usr/share/help /usr/lib/debug /usr/src/debug /usr/share/applications/calamares.desktop *.la *.a -libgcc.a -libgcc_eh.a -libgcov.a -libc_nonshared.a -libmvec_nonshared.a}"
 
 declare -A AVASILE_MODE_CONF=(
 	[binpkgmode]="make.conf.amd64-user"
