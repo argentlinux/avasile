@@ -504,6 +504,12 @@ iso_units_enable() {
 	set +x
 }
 
+iso_locale_set() {
+	chroot "${ISO_RSYNC_TARGET}" su - "${ISO_CHROOT_USER}" -c \
+		"eselect locale set en_US.utf8 && env-update --no-ldconfig" \
+		|| ewarn "Could not set the live locale"
+}
+
 isoinstallmask() {
 	local conf_dir
 	conf_dir="$(dirname "${ISO_LIVE_CONF}")"
@@ -706,6 +712,7 @@ iso_rootfs_build() {
 
     iso_mount
     iso_units_enable
+    iso_locale_set
     iso_umount
 
     rm -f "${ISO_RSYNC_TARGET}/etc/resolv.conf"
